@@ -1,0 +1,55 @@
+project:
+  name: quantstrat_ml_asset_pricing
+  random_seed: 42
+
+data:
+  frequency: monthly
+  date_column: date
+  asset_id_column: permno
+  target_column: ret_excess_lead1
+  weight_column: market_equity
+  industry_column: sic2
+  raw_returns_path: data/raw/crsp_monthly_returns.parquet
+  raw_characteristics_path: data/raw/firm_characteristics.parquet
+  raw_macro_path: data/external/macro_predictors.parquet
+  processed_panel_path: data/processed/monthly_panel.parquet
+
+features:
+  rank_characteristics: true
+  rank_range: [-1.0, 1.0]
+  add_industry_dummies: true
+  add_macro_interactions: true
+  macro_predictors:
+    - dp
+    - ep
+    - bm
+    - ntis
+    - tbl
+    - tms
+    - dfy
+    - svar
+
+splits:
+  scheme: rolling
+  train_years: 18
+  validation_years: 12
+  test_years: 1
+  min_train_start: "1957-03-31"
+
+models:
+  enabled:
+    - ols
+    - ols_3
+    - elastic_net_huber
+    - pcr
+    - pls
+    - random_forest
+    - gbrt_huber
+    - neural_net
+
+evaluation:
+  benchmark_forecast: zero
+  portfolio_deciles: 10
+  annualization_factor: 12
+  newey_west_lags: 12
+
