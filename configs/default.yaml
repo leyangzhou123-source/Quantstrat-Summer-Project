@@ -4,20 +4,23 @@ project:
 
 data:
   frequency: monthly
-  date_column: date
+  date_column: month
   asset_id_column: permno
   target_column: ret_excess_lead1
   weight_column: market_equity
   industry_column: sic2
-  raw_returns_path: data/raw/crsp_monthly_returns.parquet
-  raw_characteristics_path: data/raw/firm_characteristics.parquet
-  raw_macro_path: data/external/macro_predictors.parquet
-  processed_panel_path: data/processed/monthly_panel.parquet
+  raw_returns_path: data/raw/stock_returns.parquet
+  raw_characteristics_path: data/raw/stock_characteristics.parquet
+  raw_macro_path: data/raw/welch_goyal_macros.parquet
+  raw_industry_path: data/raw/industry_dummies.parquet
+  raw_factors_path: data/raw/fama_french_factors.parquet
+  processed_panel_path: data/processed/model_panel.parquet
 
 features:
   rank_characteristics: true
   rank_range: [-1.0, 1.0]
   add_industry_dummies: true
+  add_industry_characteristic_interactions: true
   add_macro_interactions: true
   macro_predictors:
     - dp
@@ -30,26 +33,28 @@ features:
     - svar
 
 splits:
-  scheme: rolling
-  train_years: 18
-  validation_years: 12
-  test_years: 1
-  min_train_start: "1957-03-31"
+  scheme: fixed
+  train_start: "1957-03-31"
+  train_end: "1974-12-31"
+  validation_start: "1975-01-01"
+  validation_end: "1986-12-31"
+  test_start: "1987-01-01"
+  test_end: "2016-12-31"
 
 models:
   enabled:
     - ols
-    - ols_3
-    - elastic_net_huber
-    - pcr
-    - pls
-    - random_forest
-    - gbrt_huber
-    - neural_net
+    - ridge
+
+model_params:
+  ols:
+    fit_intercept: true
+  ridge:
+    alpha: 1.0
+    fit_intercept: true
 
 evaluation:
   benchmark_forecast: zero
   portfolio_deciles: 10
   annualization_factor: 12
   newey_west_lags: 12
-

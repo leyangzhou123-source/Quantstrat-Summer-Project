@@ -37,6 +37,10 @@ MODEL_SPECS: dict[str, ModelSpec] = {
         supports_huber=True,
         captures_interactions=True,
     ),
-    "neural_net": ModelSpec("neural_net", "neural_network", captures_interactions=True),
+    "nn1": ModelSpec("nn1", "neural_network", captures_interactions=True),
+    "nn2": ModelSpec("nn2", "neural_network", captures_interactions=True),
+    "nn3": ModelSpec("nn3", "neural_network", captures_interactions=True),
+    "nn4": ModelSpec("nn4", "neural_network", captures_interactions=True),
+    "nn5": ModelSpec("nn5", "neural_network", captures_interactions=True),
+    "transformer_nn": ModelSpec("transformer_nn", "neural_network_extension", captures_interactions=True),
 }
-
