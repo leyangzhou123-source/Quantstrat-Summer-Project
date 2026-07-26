@@ -36,8 +36,12 @@ def train_validate_predict_depth(
         )
 
     def model(candidate: dict[str, Any]):
-        width = candidate.get("width", config.get("width", 32))
-        hidden_layer_sizes = tuple([width] * depth)
+        configured = candidate.get("layer_widths", config.get("layer_widths"))
+        if configured:
+            hidden_layer_sizes = tuple(int(width) for width in configured[:depth])
+        else:
+            width = int(candidate.get("width", config.get("width", 32)))
+            hidden_layer_sizes = tuple(max(1, width // (2**layer)) for layer in range(depth))
         return MLPRegressor(
             hidden_layer_sizes=hidden_layer_sizes,
             activation=config.get("activation", "relu"),

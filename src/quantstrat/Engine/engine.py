@@ -326,16 +326,37 @@ class ResearchEngine:
     ) -> ModelResult:
         module = import_module(f"quantstrat.models.{self.model_module_name(model_name)}")
         model_config = self.config.get("model_params", {}).get(model_name, {})
+        model_features = self.model_feature_columns(model_config, features)
         return module.train_validate_predict(
             train=train,
             validation=validation,
             test=test,
             target=self.schema.target,
-            features=features,
+            features=model_features,
             config=model_config,
             random_seed=self.config["project"]["random_seed"],
             weight_column=self.schema.weight,
         )
+
+    def model_feature_columns(self, model_config: dict[str, Any], default_features: list[str]) -> list[str]:
+        if model_config.get("features"):
+            return list(model_config["features"])
+        feature_set = model_config.get("feature_set")
+        if not feature_set:
+            return default_features
+        manifest_path = self.project_root / self.config["data"].get(
+            "manifest_path", "data/processed/model_panel_manifest.json"
+        )
+        if not manifest_path.exists():
+            raise ValueError(f"Cannot use model feature_set without manifest: {manifest_path}")
+        manifest = json.loads(manifest_path.read_text())
+        macro_cols = [
+            f"macro_{name}"
+            for name in self.config.get("features", {}).get("macro_predictors", [])
+        ]
+        if not macro_cols:
+            macro_cols = manifest.get("macro_predictors", [])
+        return self.features_from_manifest(manifest, macro_cols, feature_set=feature_set)
 
     def prediction_frame(self, result: ModelResult, test: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(
@@ -369,12 +390,16 @@ class ResearchEngine:
     def model_module_name(model_name: str) -> str:
         module_names = {
             "ols": "OLS",
+            "ols_huber": "OLSHuber",
             "ols_3": "OLS",
             "ridge": "Ridge",
             "elastic_net": "ElasticNet",
             "elastic_net_huber": "ElasticNetHuber",
             "pcr": "PCR",
+            "pls": "PLS",
+            "glm_huber": "GLMHuber",
             "random_forest": "RandomForest",
+            "gbrt_huber": "GBRTHuber",
             "nn1": "NN1",
             "nn2": "NN2",
             "nn3": "NN3",

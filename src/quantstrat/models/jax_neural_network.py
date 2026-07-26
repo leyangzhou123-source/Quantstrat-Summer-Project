@@ -135,13 +135,25 @@ def train_validate_predict_jax_depth(
     steps_per_epoch = max(1, len(x_train) // batch_size)
     input_dim = len(features)
 
-    def init_params(key: Any, width: int) -> list[tuple[Any, Any]]:
-        layer_sizes = [input_dim] + [width] * depth + [1]
+    def hidden_widths(candidate: dict[str, Any]) -> list[int]:
+        configured = candidate.get("layer_widths", config.get("layer_widths"))
+        if configured:
+            return [int(width) for width in configured[:depth]]
+        width = int(candidate.get("width", config.get("width", 32)))
+        return [max(1, width // (2**layer)) for layer in range(depth)]
+
+    def init_params(key: Any, widths: list[int]) -> list[tuple[Any, Any]]:
+        layer_sizes = [input_dim] + widths + [1]
         params = []
         keys = jax.random.split(key, len(layer_sizes) - 1)
-        for layer_key, fan_in, fan_out in zip(keys, layer_sizes[:-1], layer_sizes[1:]):
+        for layer_index, (layer_key, fan_in, fan_out) in enumerate(
+            zip(keys, layer_sizes[:-1], layer_sizes[1:])
+        ):
             scale = jnp.sqrt(jnp.asarray(2.0 / max(fan_in, 1), dtype=jnp.float32))
-            weight = jax.random.normal(layer_key, (fan_in, fan_out), dtype=jnp.float32) * scale
+            if config.get("zero_output_init", True) and layer_index == len(layer_sizes) - 2:
+                weight = jnp.zeros((fan_in, fan_out), dtype=jnp.float32)
+            else:
+                weight = jax.random.normal(layer_key, (fan_in, fan_out), dtype=jnp.float32) * scale
             bias = jnp.zeros((fan_out,), dtype=jnp.float32)
             params.append((weight, bias))
         return params
@@ -210,37 +222,182 @@ def train_validate_predict_jax_depth(
     def predict_batch(params: list[tuple[Any, Any]], x: Any) -> Any:
         return forward(params, x)
 
+    @jax.jit
+    def hidden_batch(params: list[tuple[Any, Any]], x: Any) -> Any:
+        hidden = x
+        for weight, bias in params[:-1]:
+            hidden = activation_fn(hidden @ weight + bias)
+        return hidden
+
+    def hidden_numpy(params: list[tuple[Any, Any]], x_values: np.ndarray) -> np.ndarray:
+        chunks = []
+        for start in range(0, int(x_values.shape[0]), validation_batch_size):
+            x_chunk = jnp.asarray(x_values[start : start + validation_batch_size])
+            chunks.append(np.asarray(hidden_batch(params, x_chunk), dtype=np.float32))
+        return np.concatenate(chunks)
+
     def predict_numpy(params: list[tuple[Any, Any]], x_values: np.ndarray) -> np.ndarray:
         chunks = []
         for start in range(0, int(x_values.shape[0]), validation_batch_size):
             x_chunk = jnp.asarray(x_values[start : start + validation_batch_size])
             chunks.append(np.asarray(predict_batch(params, x_chunk)))
         predictions = np.concatenate(chunks)
-        return predictions * target_std + target_mean
+        predictions = predictions * target_std + target_mean
+        forecast_clip = config.get("forecast_clip")
+        if forecast_clip:
+            low, high = forecast_clip
+            predictions = np.clip(predictions, float(low), float(high))
+        return predictions
 
-    best_estimator: list[tuple[Any, Any]] | None = None
-    best_score = -np.inf
-    best_params: dict[str, Any] = {}
+    def fit_weighted_ridge_output(
+        hidden_train: np.ndarray,
+        y_values: np.ndarray,
+        weights: np.ndarray,
+        alpha: float,
+    ) -> np.ndarray:
+        design = np.column_stack(
+            [np.ones(len(hidden_train), dtype=np.float32), hidden_train.astype(np.float32, copy=False)]
+        )
+        root_weights = np.sqrt(weights).astype(np.float32, copy=False)
+        weighted_design = design * root_weights[:, None]
+        weighted_y = y_values * root_weights
+        xtx = weighted_design.T @ weighted_design
+        xty = weighted_design.T @ weighted_y
+        penalty = np.eye(xtx.shape[0], dtype=np.float32) * np.float32(alpha)
+        penalty[0, 0] = 0.0
+        try:
+            return np.linalg.solve(xtx + penalty, xty)
+        except np.linalg.LinAlgError:
+            return np.linalg.lstsq(xtx + penalty, xty, rcond=None)[0]
 
-    for candidate in _candidate_configs(config):
-        width = int(candidate.get("width", config.get("width", 32)))
+    def predict_ridge_output(hidden_values: np.ndarray, coefficients: np.ndarray) -> np.ndarray:
+        predictions = coefficients[0] + hidden_values @ coefficients[1:]
+        predictions = predictions * target_std + target_mean
+        forecast_clip = config.get("forecast_clip")
+        if forecast_clip:
+            low, high = forecast_clip
+            predictions = np.clip(predictions, float(low), float(high))
+        return predictions
+
+    if config.get("output_ridge", False):
+        best_members: list[tuple[list[tuple[Any, Any]], np.ndarray]] | None = None
+        best_score = -np.inf
+        best_params: dict[str, Any] = {}
+        best_shrinkage = 1.0
+        for candidate in _candidate_configs(config):
+            widths = hidden_widths(candidate)
+            alpha = float(candidate.get("alpha", config.get("output_ridge_alpha", 10000.0)))
+            shrinkage_values = candidate.get(
+                "output_shrinkage", config.get("output_shrinkage_grid", [1.0])
+            )
+            if isinstance(shrinkage_values, (int, float)):
+                shrinkage_values = [float(shrinkage_values)]
+            ensemble_seeds = candidate.get("ensemble_seeds", config.get("ensemble_seeds", [random_seed]))
+            if isinstance(ensemble_seeds, int):
+                ensemble_seeds = [ensemble_seeds]
+            members = []
+            validation_forecasts = []
+            for seed in ensemble_seeds:
+                params = init_params(jax.random.PRNGKey(int(seed)), widths)
+                hidden_train = hidden_numpy(params, x_train)
+                hidden_validation = hidden_numpy(params, x_validation)
+                hidden_mean = hidden_train.mean(axis=0, dtype=np.float64).astype(np.float32)
+                hidden_std = hidden_train.std(axis=0, dtype=np.float64).astype(np.float32)
+                hidden_std[~np.isfinite(hidden_std) | (hidden_std == 0)] = 1.0
+                hidden_train = (hidden_train - hidden_mean) / hidden_std
+                hidden_validation = (hidden_validation - hidden_mean) / hidden_std
+                coefficients = fit_weighted_ridge_output(
+                    hidden_train=hidden_train,
+                    y_values=y_train,
+                    weights=train_weights,
+                    alpha=alpha,
+                )
+                members.append((params, coefficients, hidden_mean, hidden_std))
+                validation_forecasts.append(predict_ridge_output(hidden_validation, coefficients))
+            raw_validation_forecast = np.mean(validation_forecasts, axis=0)
+            center = float(np.mean(raw_validation_forecast))
+            for shrinkage in shrinkage_values:
+                validation_prediction = pd.Series(
+                    center + float(shrinkage) * (raw_validation_forecast - center),
+                    index=validation.index,
+                    name="forecast",
+                )
+                score = out_of_sample_r2(
+                    validation_target,
+                    validation_prediction,
+                    weights=validation_weight_values,
+                )
+                if best_members is None or (np.isfinite(score) and score > best_score):
+                    best_members = members
+                    best_score = score
+                    best_shrinkage = float(shrinkage)
+                    best_params = candidate | {
+                        "backend": "jax_output_ridge",
+                        "layer_widths": "-".join(str(width) for width in widths),
+                        "ensemble_size": len(members),
+                        "output_shrinkage": best_shrinkage,
+                        "epochs": 0.0,
+                        "device": str(jax.devices()[0]),
+                    }
+        if best_members is None:
+            raise RuntimeError(f"No output-ridge candidate was fit for nn{depth}.")
+        test_forecasts = []
+        for params, coefficients, hidden_mean, hidden_std in best_members:
+            hidden_test = (hidden_numpy(params, x_test) - hidden_mean) / hidden_std
+            test_forecasts.append(predict_ridge_output(hidden_test, coefficients))
+        raw_test_forecast = np.mean(test_forecasts, axis=0)
+        test_center = float(np.mean(raw_test_forecast))
+        test_prediction = pd.Series(
+            test_center + best_shrinkage * (raw_test_forecast - test_center),
+            index=test.index,
+            name="forecast",
+        )
+        return ModelResult(
+            model_name=f"nn{depth}",
+            predictions=test_prediction,
+            validation_metrics={
+                "oos_r2": best_score,
+                **{f"best_{key}": value for key, value in best_params.items()},
+            },
+        )
+
+    def train_single_member(
+        candidate: dict[str, Any],
+        widths: list[int],
+        seed: int,
+    ) -> tuple[list[tuple[Any, Any]], float, int]:
         alpha = float(candidate.get("alpha", config.get("alpha", 1e-4)))
         learning_rate = float(
             candidate.get("learning_rate_init", config.get("learning_rate_init", 1e-3))
         )
-        key = jax.random.PRNGKey(random_seed)
-        rng = np.random.default_rng(random_seed)
-        params = init_params(key, width)
-        zero_weight_moments = [(jnp.zeros_like(weight), jnp.zeros_like(weight)) for weight, _ in params]
-        zero_bias_moments = [(jnp.zeros_like(bias), jnp.zeros_like(bias)) for _, bias in params]
+        learning_rate_decay = float(config.get("learning_rate_decay", 1.0))
+        key = jax.random.PRNGKey(seed)
+        rng = np.random.default_rng(seed)
+        params = init_params(key, widths)
+        zero_weight_moments = [
+            (jnp.zeros_like(weight), jnp.zeros_like(weight)) for weight, _ in params
+        ]
+        zero_bias_moments = [
+            (jnp.zeros_like(bias), jnp.zeros_like(bias)) for _, bias in params
+        ]
         moments = [zero_weight_moments, zero_bias_moments]
-        best_candidate_params = None
-        best_candidate_score = -np.inf
+        initial_validation_prediction = pd.Series(
+            predict_numpy(params, x_validation),
+            index=validation.index,
+            name="forecast",
+        )
+        best_member_params = params
+        best_member_score = out_of_sample_r2(
+            validation_target,
+            initial_validation_prediction,
+            weights=validation_weight_values,
+        )
         epochs_without_improvement = 0
         step = jnp.asarray(1, dtype=jnp.int32)
 
         for epoch in range(max_iter):
             shuffled = rng.permutation(len(x_train))[: steps_per_epoch * batch_size]
+            current_learning_rate = learning_rate * (learning_rate_decay**epoch)
             for batch_idx in range(steps_per_epoch):
                 batch_index = shuffled[batch_idx * batch_size : (batch_idx + 1) * batch_size]
                 params, moments, _ = train_step(
@@ -249,7 +406,7 @@ def train_validate_predict_jax_depth(
                     jnp.asarray(x_train[batch_index]),
                     jnp.asarray(y_train[batch_index]),
                     jnp.asarray(train_weights[batch_index]),
-                    learning_rate,
+                    current_learning_rate,
                     alpha,
                     step,
                 )
@@ -267,25 +424,58 @@ def train_validate_predict_jax_depth(
                 validation_prediction,
                 weights=validation_weight_values,
             )
-            improved = (
-                best_candidate_params is None
-                or (np.isfinite(score) and score > best_candidate_score + tol)
-            )
+            improved = np.isfinite(score) and score > best_member_score + tol
             if improved:
-                best_candidate_params = params
-                best_candidate_score = score
+                best_member_params = params
+                best_member_score = score
                 epochs_without_improvement = 0
             else:
                 epochs_without_improvement += 1
             if config.get("early_stopping", True) and epochs_without_improvement >= n_iter_no_change:
                 break
 
-        if best_estimator is None or (np.isfinite(best_candidate_score) and best_candidate_score > best_score):
-            best_estimator = best_candidate_params
-            best_score = best_candidate_score
+        if best_member_params is None:
+            best_member_params = params
+        return best_member_params, best_member_score, epoch + 1
+
+    best_estimator: list[list[tuple[Any, Any]]] | None = None
+    best_score = -np.inf
+    best_params: dict[str, Any] = {}
+
+    for candidate in _candidate_configs(config):
+        widths = hidden_widths(candidate)
+        ensemble_seeds = candidate.get("ensemble_seeds", config.get("ensemble_seeds", [random_seed]))
+        if isinstance(ensemble_seeds, int):
+            ensemble_seeds = [ensemble_seeds]
+        member_params = []
+        member_epochs = []
+        for seed in ensemble_seeds:
+            params, _, epochs = train_single_member(candidate, widths, int(seed))
+            member_params.append(params)
+            member_epochs.append(epochs)
+        validation_forecast = np.mean(
+            [predict_numpy(params, x_validation) for params in member_params],
+            axis=0,
+        )
+        validation_prediction = pd.Series(
+            validation_forecast,
+            index=validation.index,
+            name="forecast",
+        )
+        candidate_score = out_of_sample_r2(
+            validation_target,
+            validation_prediction,
+            weights=validation_weight_values,
+        )
+
+        if best_estimator is None or (np.isfinite(candidate_score) and candidate_score > best_score):
+            best_estimator = member_params
+            best_score = candidate_score
             best_params = candidate | {
                 "backend": "jax",
-                "epochs": epoch + 1,
+                "layer_widths": "-".join(str(width) for width in widths),
+                "ensemble_size": len(member_params),
+                "epochs": float(np.mean(member_epochs)),
                 "device": str(jax.devices()[0]),
             }
 
@@ -293,7 +483,7 @@ def train_validate_predict_jax_depth(
         raise RuntimeError(f"No candidate estimator was fit for nn{depth}.")
 
     test_prediction = pd.Series(
-        predict_numpy(best_estimator, x_test),
+        np.mean([predict_numpy(params, x_test) for params in best_estimator], axis=0),
         index=test.index,
         name="forecast",
     )

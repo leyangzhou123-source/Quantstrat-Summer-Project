@@ -93,6 +93,14 @@ def train_validate_predict_sklearn(
     x_validation = _feature_matrix(validation, features, copy=config.get("copy_features", False))
     x_test = _feature_matrix(test, features, copy=config.get("copy_features", False))
     y_train = train[target].to_numpy(dtype=float)
+    y_mean = 0.0
+    y_std = 1.0
+    if config.get("standardize_target", False):
+        y_mean = float(np.nanmean(y_train))
+        y_std = float(np.nanstd(y_train))
+        if not np.isfinite(y_std) or y_std == 0.0:
+            y_std = 1.0
+        y_train = (y_train - y_mean) / y_std
     train_weights = _sample_weights(train, weight_column if config.get("use_sample_weight", True) else None)
     validation_weights = _sample_weights(validation, weight_column if config.get("weighted_validation", True) else None)
     validation_target = validation[target].copy()
@@ -111,6 +119,15 @@ def train_validate_predict_sklearn(
             x_train, x_validation, x_test
         )
 
+    def predict(estimator: RegressorMixin, x: np.ndarray) -> np.ndarray:
+        forecast = np.asarray(estimator.predict(x), dtype=float).reshape(-1)
+        if config.get("standardize_target", False):
+            forecast = forecast * y_std + y_mean
+        clip = config.get("forecast_clip")
+        if clip:
+            forecast = np.clip(forecast, float(clip[0]), float(clip[1]))
+        return forecast
+
     best_estimator: RegressorMixin | None = None
     best_score = -np.inf
     best_params: dict[str, Any] = {}
@@ -125,7 +142,7 @@ def train_validate_predict_sklearn(
             **_fit_params_for_weights(candidate_estimator, train_weights),
         )
         validation_prediction = pd.Series(
-            candidate_estimator.predict(x_validation),
+            predict(candidate_estimator, x_validation),
             index=validation.index,
             name="forecast",
         )
@@ -143,12 +160,12 @@ def train_validate_predict_sklearn(
         raise RuntimeError(f"No candidate estimator was fit for {model_name}.")
 
     test_prediction = pd.Series(
-        best_estimator.predict(x_test),
+        predict(best_estimator, x_test),
         index=test.index,
         name="forecast",
     )
     validation_prediction = pd.Series(
-        best_estimator.predict(x_validation),
+        predict(best_estimator, x_validation),
         index=validation.index,
         name="forecast",
     )
