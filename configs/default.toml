@@ -7,14 +7,15 @@ frequency = "monthly"
 date_column = "month"
 asset_id_column = "permno"
 target_column = "ret_excess_lead1"
-weight_column = "market_equity"
+weight_column = "me"
 industry_column = "sic2"
 raw_returns_path = "data/raw/stock_returns.parquet"
 raw_characteristics_path = "data/raw/stock_characteristics.parquet"
 raw_macro_path = "data/raw/welch_goyal_macros.parquet"
 raw_industry_path = "data/raw/industry_dummies.parquet"
 raw_factors_path = "data/raw/fama_french_factors.parquet"
-processed_panel_path = "data/processed/model_panel.parquet"
+processed_panel_path = "data/processed/model_penal.parquet"
+manifest_path = "data/processed/model_penal_manifest.json"
 
 [features]
 rank_characteristics = true
@@ -22,6 +23,7 @@ rank_range = [-1.0, 1.0]
 add_industry_dummies = true
 add_industry_characteristic_interactions = true
 add_macro_interactions = true
+feature_set = "baseline"
 macro_predictors = ["dp", "ep", "bm", "ntis", "tbl", "tms", "dfy", "svar"]
 
 [splits]
@@ -35,8 +37,13 @@ test_end = "2016-12-31"
 
 [models]
 enabled = [
-  "ols",
   "ridge",
+  "elastic_net_huber",
+  "nn1",
+  "nn2",
+  "nn3",
+  "nn4",
+  "nn5",
 ]
 
 [model_params.ols]
@@ -45,6 +52,51 @@ fit_intercept = true
 [model_params.ridge]
 alpha = 1.0
 fit_intercept = true
+
+[model_params.elastic_net_huber]
+alpha = 0.0001
+l1_ratio = 0.5
+max_iter = 1000
+
+[model_params.nn1]
+width = 32
+alpha = 0.0001
+learning_rate_init = 0.001
+batch_size = 4096
+max_iter = 100
+early_stopping = true
+
+[model_params.nn2]
+width = 32
+alpha = 0.0001
+learning_rate_init = 0.001
+batch_size = 4096
+max_iter = 100
+early_stopping = true
+
+[model_params.nn3]
+width = 32
+alpha = 0.0001
+learning_rate_init = 0.001
+batch_size = 4096
+max_iter = 100
+early_stopping = true
+
+[model_params.nn4]
+width = 32
+alpha = 0.0001
+learning_rate_init = 0.001
+batch_size = 4096
+max_iter = 100
+early_stopping = true
+
+[model_params.nn5]
+width = 32
+alpha = 0.0001
+learning_rate_init = 0.001
+batch_size = 4096
+max_iter = 100
+early_stopping = true
 
 [evaluation]
 benchmark_forecast = "zero"

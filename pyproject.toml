@@ -17,6 +17,7 @@ dev = [
   "ruff>=0.4",
 ]
 models = [
+  "jax>=0.4",
   "xgboost>=2.0",
   "torch>=2.0",
 ]

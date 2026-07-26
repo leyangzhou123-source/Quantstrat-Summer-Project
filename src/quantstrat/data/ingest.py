@@ -11,9 +11,12 @@ def validate_panel(panel: pd.DataFrame, schema: PanelSchema) -> None:
         raise ValueError(f"Panel is missing required columns: {sorted(missing)}")
 
 
-def load_processed_panel(path: str, schema: PanelSchema | None = None) -> pd.DataFrame:
+def load_processed_panel(
+    path: str,
+    schema: PanelSchema | None = None,
+    columns: list[str] | None = None,
+) -> pd.DataFrame:
     schema = schema or PanelSchema()
-    panel = pd.read_parquet(path)
+    panel = pd.read_parquet(path, columns=columns)
     validate_panel(panel, schema)
     return panel.sort_values([schema.date, schema.asset_id]).reset_index(drop=True)
-
