@@ -17,4 +17,3 @@ def fit_and_predict(
     predictions["forecast"] = fitted.predict(test, features=features)
     predictions["model"] = model.name
     return predictions
-

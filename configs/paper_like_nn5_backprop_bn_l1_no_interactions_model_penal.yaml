@@ -1,0 +1,74 @@
+project:
+  name: quantstrat_ml_asset_pricing
+  random_seed: 42
+
+data:
+  frequency: monthly
+  date_column: month
+  asset_id_column: permno
+  target_column: ret_excess_lead1
+  weight_column: me
+  industry_column: sic2
+  processed_panel_path: data/processed/model_penal.parquet
+  manifest_path: data/processed/model_penal_manifest.json
+
+features:
+  feature_set: no_interactions
+  macro_predictors:
+    - dp
+    - ep
+    - bm
+    - ntis
+    - tbl
+    - tms
+    - dfy
+    - svar
+
+splits:
+  scheme: paper_rolling
+  train_start: "1957-03-31"
+  validation_years: 12
+  first_test_year: 1987
+  last_test_year: 2016
+
+models:
+  enabled:
+    - nn5
+
+model_params:
+  nn5:
+    backend: jax
+    output_ridge: false
+    layer_widths: [32, 16, 8, 4, 2]
+    ensemble_seeds: [42, 43, 44]
+    activation: relu
+    batch_size: 8192
+    max_iter: 100
+    validate_every: 1
+    early_stopping: true
+    n_iter_no_change: 8
+    tol: 0.000001
+    learning_rate_decay: 0.99
+    zero_output_init: false
+    output_init_scale: 0.01
+    standardize_target: true
+    clip_grad_norm: 5.0
+    batch_normalization: true
+    batch_norm_epsilon: 0.00001
+    forecast_clip: null
+    use_sample_weight: false
+    weighted_validation: false
+    prediction_batch_size: 65536
+    scale_features: true
+    drop_features_after_matrix: true
+    validation_grid:
+      alpha: [0.000001, 0.00001, 0.0001]
+      l1_alpha: [0.000001, 0.00001]
+      learning_rate_init: [0.0001]
+
+evaluation:
+  benchmark_forecast: zero
+  weighted_oos_r2: false
+  portfolio_deciles: 10
+  annualization_factor: 12
+  newey_west_lags: 12

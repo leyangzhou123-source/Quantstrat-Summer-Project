@@ -91,7 +91,9 @@ def train_validate_predict(
         )
 
     x_train = _feature_matrix(train, model_features, copy=config.get("copy_features", False))
-    x_validation = _feature_matrix(validation, model_features, copy=config.get("copy_features", False))
+    x_validation = _feature_matrix(
+        validation, model_features, copy=config.get("copy_features", False)
+    )
     x_test = _feature_matrix(test, model_features, copy=config.get("copy_features", False))
     y_train = train[target].to_numpy(dtype=float)
     train_weights = _sample_weights(
@@ -112,9 +114,7 @@ def train_validate_predict(
         test.drop(columns=model_features, inplace=True, errors="ignore")
         gc.collect()
     if config.get("scale_features", True):
-        x_train, x_validation, x_test = _scale_train_validation_test(
-            x_train, x_validation, x_test
-        )
+        x_train, x_validation, x_test = _scale_train_validation_test(x_train, x_validation, x_test)
 
     coefficients = _fit_weighted_ols(
         x_train=x_train,

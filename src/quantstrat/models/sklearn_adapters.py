@@ -13,7 +13,6 @@ from sklearn.neural_network import MLPRegressor
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-
 ArrayLike = np.ndarray | sparse.spmatrix
 
 
@@ -23,7 +22,7 @@ class SklearnModelAdapter:
     estimator: RegressorMixin
     dense_required: bool = False
 
-    def fit_array(self, x: ArrayLike, y: np.ndarray) -> "SklearnModelAdapter":
+    def fit_array(self, x: ArrayLike, y: np.ndarray) -> SklearnModelAdapter:
         self.estimator.fit(self._as_model_input(x), y)
         return self
 

@@ -10,4 +10,3 @@ def test_out_of_sample_r2_improves_on_zero_benchmark() -> None:
     forecast = pd.Series([0.5, -0.5, 1.5])
 
     assert out_of_sample_r2(actual, forecast) > 0
-

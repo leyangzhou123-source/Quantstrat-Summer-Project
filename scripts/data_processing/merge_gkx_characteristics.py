@@ -11,7 +11,6 @@ import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-
 ROOT = Path(__file__).resolve().parents[2]
 PROCESSED_DIR = ROOT / "data" / "processed"
 EXTERNAL_DIR = ROOT / "data" / "external"
@@ -32,9 +31,8 @@ def parquet_columns(path: Path) -> list[str]:
 
 
 def read_gkx_columns(zip_path: Path) -> list[str]:
-    with zipfile.ZipFile(zip_path) as archive:
-        with archive.open("datashare.csv") as handle:
-            return pd.read_csv(handle, nrows=0).columns.tolist()
+    with zipfile.ZipFile(zip_path) as archive, archive.open("datashare.csv") as handle:
+        return pd.read_csv(handle, nrows=0).columns.tolist()
 
 
 def stage_gkx_zip_to_parquet(
@@ -53,27 +51,36 @@ def stage_gkx_zip_to_parquet(
     max_yyyymm: int | None = None
     duplicate_keys = 0
 
-    with zipfile.ZipFile(zip_path) as archive:
-        with archive.open("datashare.csv") as handle:
-            for chunk in pd.read_csv(handle, chunksize=chunksize):
-                chunk["yyyymm"] = (pd.to_numeric(chunk["DATE"], errors="coerce") // 100).astype("Int64")
-                chunk = chunk[(chunk["yyyymm"] >= start_yyyymm) & (chunk["yyyymm"] <= end_yyyymm)].copy()
-                if chunk.empty:
-                    continue
-                duplicate_keys += int(chunk.duplicated(KEY_COLUMNS).sum())
-                chunk["yyyymm"] = chunk["yyyymm"].astype("int64")
-                chunk["_gkx_present"] = True
-                chunk = chunk.drop(columns=["DATE"])
-                cols = KEY_COLUMNS + [c for c in chunk.columns if c not in KEY_COLUMNS]
-                chunk = chunk[cols]
-                rows += len(chunk)
-                min_yyyymm = int(chunk["yyyymm"].min()) if min_yyyymm is None else min(min_yyyymm, int(chunk["yyyymm"].min()))
-                max_yyyymm = int(chunk["yyyymm"].max()) if max_yyyymm is None else max(max_yyyymm, int(chunk["yyyymm"].max()))
+    with zipfile.ZipFile(zip_path) as archive, archive.open("datashare.csv") as handle:
+        for chunk in pd.read_csv(handle, chunksize=chunksize):
+            chunk["yyyymm"] = (pd.to_numeric(chunk["DATE"], errors="coerce") // 100).astype("Int64")
+            chunk = chunk[
+                (chunk["yyyymm"] >= start_yyyymm) & (chunk["yyyymm"] <= end_yyyymm)
+            ].copy()
+            if chunk.empty:
+                continue
+            duplicate_keys += int(chunk.duplicated(KEY_COLUMNS).sum())
+            chunk["yyyymm"] = chunk["yyyymm"].astype("int64")
+            chunk["_gkx_present"] = True
+            chunk = chunk.drop(columns=["DATE"])
+            cols = KEY_COLUMNS + [c for c in chunk.columns if c not in KEY_COLUMNS]
+            chunk = chunk[cols]
+            rows += len(chunk)
+            min_yyyymm = (
+                int(chunk["yyyymm"].min())
+                if min_yyyymm is None
+                else min(min_yyyymm, int(chunk["yyyymm"].min()))
+            )
+            max_yyyymm = (
+                int(chunk["yyyymm"].max())
+                if max_yyyymm is None
+                else max(max_yyyymm, int(chunk["yyyymm"].max()))
+            )
 
-                table = pa.Table.from_pandas(chunk, preserve_index=False)
-                if writer is None:
-                    writer = pq.ParquetWriter(output_path, table.schema, compression="zstd")
-                writer.write_table(table)
+            table = pa.Table.from_pandas(chunk, preserve_index=False)
+            if writer is None:
+                writer = pq.ParquetWriter(output_path, table.schema, compression="zstd")
+            writer.write_table(table)
 
     if writer is not None:
         writer.close()
@@ -116,10 +123,7 @@ def merge_characteristics(
     for col in gkx_feature_cols:
         if col in current_feature_cols:
             expressions.append(
-                pl.when(present)
-                .then(pl.col(f"{col}__gkx"))
-                .otherwise(pl.col(col))
-                .alias(col)
+                pl.when(present).then(pl.col(f"{col}__gkx")).otherwise(pl.col(col)).alias(col)
             )
         else:
             expressions.append(pl.col(col).alias(col))
@@ -135,22 +139,34 @@ def merge_characteristics(
 
     current_keys = pl.scan_parquet(backup_path).select(KEY_COLUMNS)
     gkx_keys = pl.scan_parquet(gkx_path).select(KEY_COLUMNS + ["_gkx_present"])
-    key_check = current_keys.join(gkx_keys, on=KEY_COLUMNS, how="left").select(
-        [
-            pl.len().alias("current_rows"),
-            pl.col("_gkx_present").fill_null(False).sum().alias("rows_replaced_from_gkx"),
-            (~pl.col("_gkx_present").fill_null(False)).sum().alias("rows_kept_from_current_no_gkx_key"),
-        ]
-    ).collect()
-    extra_gkx = gkx_keys.join(current_keys, on=KEY_COLUMNS, how="anti").select(pl.len()).collect().item()
-    output_info = pl.scan_parquet(output_path).select(
-        [
-            pl.len().alias("output_rows"),
-            pl.col("yyyymm").min().alias("min_yyyymm"),
-            pl.col("yyyymm").max().alias("max_yyyymm"),
-            pl.col("permno").n_unique().alias("permnos"),
-        ]
-    ).collect()
+    key_check = (
+        current_keys.join(gkx_keys, on=KEY_COLUMNS, how="left")
+        .select(
+            [
+                pl.len().alias("current_rows"),
+                pl.col("_gkx_present").fill_null(False).sum().alias("rows_replaced_from_gkx"),
+                (~pl.col("_gkx_present").fill_null(False))
+                .sum()
+                .alias("rows_kept_from_current_no_gkx_key"),
+            ]
+        )
+        .collect()
+    )
+    extra_gkx = (
+        gkx_keys.join(current_keys, on=KEY_COLUMNS, how="anti").select(pl.len()).collect().item()
+    )
+    output_info = (
+        pl.scan_parquet(output_path)
+        .select(
+            [
+                pl.len().alias("output_rows"),
+                pl.col("yyyymm").min().alias("min_yyyymm"),
+                pl.col("yyyymm").max().alias("max_yyyymm"),
+                pl.col("permno").n_unique().alias("permnos"),
+            ]
+        )
+        .collect()
+    )
 
     report = {
         "input_current": str(current_path.relative_to(ROOT)),
@@ -177,7 +193,9 @@ def merge_characteristics(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Merge Dacheng Xiu/GKX firm characteristics into current stock characteristics.")
+    parser = argparse.ArgumentParser(
+        description="Merge Dacheng Xiu/GKX firm characteristics into current stock characteristics."
+    )
     parser.add_argument("--gkx-zip", type=Path, default=DEFAULT_GKX_ZIP)
     parser.add_argument("--current", type=Path, default=DEFAULT_CURRENT)
     parser.add_argument("--backup", type=Path, default=DEFAULT_BACKUP)

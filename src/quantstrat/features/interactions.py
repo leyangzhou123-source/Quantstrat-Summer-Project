@@ -16,9 +16,13 @@ def add_macro_interactions(
     interaction_blocks = {}
     for char_col in characteristic_columns:
         for macro_col in macro_columns:
-            interaction_blocks[f"{char_col}__x__{macro_col}"] = expanded[char_col] * expanded[macro_col]
+            interaction_blocks[f"{char_col}__x__{macro_col}"] = (
+                expanded[char_col] * expanded[macro_col]
+            )
     if interaction_blocks:
-        expanded = pd.concat([expanded, pd.DataFrame(interaction_blocks, index=expanded.index)], axis=1)
+        expanded = pd.concat(
+            [expanded, pd.DataFrame(interaction_blocks, index=expanded.index)], axis=1
+        )
     return expanded
 
 

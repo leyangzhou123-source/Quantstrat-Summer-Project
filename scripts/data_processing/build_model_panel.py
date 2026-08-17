@@ -13,13 +13,11 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 
-
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
 from quantstrat.features.interactions import add_macro_interactions
 from quantstrat.features.ranking import rank_characteristics
-
 
 RAW_DIR = ROOT / "data" / "raw"
 EXTERNAL_DIR = ROOT / "data" / "external"
@@ -111,7 +109,9 @@ def download_url(url: str, output: Path, overwrite: bool = False) -> bool:
 
 def download_public_inputs(overwrite: bool = False) -> None:
     download_url(CCM_LINK_URL, EXTERNAL_DIR / "crsp_compustat_linking.csv", overwrite=overwrite)
-    download_url(WELCH_GOYAL_MONTHLY_URL, EXTERNAL_DIR / "welch_goyal_monthly_raw.csv", overwrite=overwrite)
+    download_url(
+        WELCH_GOYAL_MONTHLY_URL, EXTERNAL_DIR / "welch_goyal_monthly_raw.csv", overwrite=overwrite
+    )
     download_url(FAMA_FRENCH_DAILY_URL, EXTERNAL_DIR / "fama_french_daily.zip", overwrite=overwrite)
 
 
@@ -198,7 +198,9 @@ def aggregate_daily_chunk(chunk: pd.DataFrame) -> pd.DataFrame:
     ).reset_index()
 
     ill = (
-        chunk.assign(ill_component=chunk["daily_ret"].abs() / chunk["dollar_vol"].replace(0, np.nan))
+        chunk.assign(
+            ill_component=chunk["daily_ret"].abs() / chunk["dollar_vol"].replace(0, np.nan)
+        )
         .groupby(["permno", "month"], sort=False)["ill_component"]
         .mean()
         .reset_index(name="ill")
@@ -264,7 +266,10 @@ def build_monthly_from_raw(
     if not parts:
         raise RuntimeError("No usable rows were found in the raw daily files")
     monthly = combine_partial_months(parts)
-    monthly["ret"] = monthly["last_adj_close"] / monthly.groupby("permno", sort=False)["last_adj_close"].shift(1) - 1.0
+    monthly["ret"] = (
+        monthly["last_adj_close"] / monthly.groupby("permno", sort=False)["last_adj_close"].shift(1)
+        - 1.0
+    )
     monthly["market_equity"] = monthly["last_adj_close"].abs() * monthly["cshoc"]
     monthly["sic2"] = (monthly["sic"].fillna(0).astype("int64") // 100).astype("int64")
     return monthly.sort_values(["permno", "month"]).reset_index(drop=True)
@@ -287,7 +292,10 @@ def add_return_characteristics(monthly: pd.DataFrame) -> pd.DataFrame:
     panel["mom1m"] = grouped.shift(1)
     for window, name in [(6, "mom6m"), (12, "mom12m"), (36, "mom36m")]:
         panel[name] = grouped.transform(
-            lambda x, w=window: (1.0 + x.shift(1)).rolling(w, min_periods=max(2, w // 2)).apply(np.prod, raw=True) - 1.0
+            lambda x, w=window: (
+                (1.0 + x.shift(1)).rolling(w, min_periods=max(2, w // 2)).apply(np.prod, raw=True)
+                - 1.0
+            )
         )
     panel["chmom"] = panel["mom6m"] - grouped.transform(
         lambda x: (1.0 + x.shift(7)).rolling(6, min_periods=3).apply(np.prod, raw=True) - 1.0
@@ -321,7 +329,11 @@ def add_beta_features(panel: pd.DataFrame) -> pd.DataFrame:
         panel["betasq"] = np.nan
         panel["idiovol"] = np.nan
         return panel
-    market = ff.assign(month=ff["date"].dt.to_period("M").dt.to_timestamp("M")).groupby("month")["mktrf"].sum()
+    market = (
+        ff.assign(month=ff["date"].dt.to_period("M").dt.to_timestamp("M"))
+        .groupby("month")["mktrf"]
+        .sum()
+    )
     panel = panel.merge(market.rename("market_ret").reset_index(), on="month", how="left")
     panel["rf"] = 0.0
     rows = []
@@ -361,8 +373,12 @@ def load_welch_goyal_monthly() -> pd.DataFrame:
     ]
     for column in numeric_columns:
         if column in raw.columns:
-            raw[column] = pd.to_numeric(raw[column].astype(str).str.replace(",", "", regex=False), errors="coerce")
-    raw["month"] = pd.to_datetime(raw["yyyymm"].astype("Int64").astype(str), format="%Y%m", errors="coerce") + pd.offsets.MonthEnd(0)
+            raw[column] = pd.to_numeric(
+                raw[column].astype(str).str.replace(",", "", regex=False), errors="coerce"
+            )
+    raw["month"] = pd.to_datetime(
+        raw["yyyymm"].astype("Int64").astype(str), format="%Y%m", errors="coerce"
+    ) + pd.offsets.MonthEnd(0)
     raw["IndexDiv"] = raw["Index"] + raw["D12"]
     raw["dp"] = np.log(raw["D12"]) - np.log(raw["Index"])
     raw["ep"] = np.log(raw["E12"]) - np.log(raw["Index"])
@@ -462,7 +478,7 @@ def build_final_panel(
             panel[column] = panel[column].astype("string")
     manifest = {
         "panel": "data/processed/no_wrds_model_panel.parquet",
-        "rows": int(len(panel)),
+        "rows": len(panel),
         "columns": int(panel.shape[1]),
         "source_daily_start": str(source_start.date()),
         "source_daily_end": str(source_end.date()),
@@ -476,7 +492,9 @@ def build_final_panel(
         "weight": "market_equity",
         "characteristics": CHARACTERISTIC_COLUMNS,
         "macro_predictors": MACRO_COLUMNS,
-        "macro_interactions": [f"{char}__x__{macro}" for char in CHARACTERISTIC_COLUMNS for macro in MACRO_COLUMNS],
+        "macro_interactions": [
+            f"{char}__x__{macro}" for char in CHARACTERISTIC_COLUMNS for macro in MACRO_COLUMNS
+        ],
         "industry_dummies": industry_cols,
         "notes": [
             "No WRDS access was used.",
@@ -496,7 +514,11 @@ def write_sparse_industry_interactions(panel: pd.DataFrame, industry_cols: list[
         indicator = sparse.csr_matrix(panel[industry_col].to_numpy(dtype=np.float32, copy=False)).T
         blocks.append(char.multiply(indicator))
         names.extend(f"{c}__x__{industry_col}" for c in CHARACTERISTIC_COLUMNS)
-    matrix = sparse.hstack(blocks, format="csr", dtype=np.float32) if blocks else sparse.csr_matrix((len(panel), 0))
+    matrix = (
+        sparse.hstack(blocks, format="csr", dtype=np.float32)
+        if blocks
+        else sparse.csr_matrix((len(panel), 0))
+    )
     matrix_path = PROCESSED_DIR / "no_wrds_industry_characteristic_interactions.npz"
     names_path = PROCESSED_DIR / "no_wrds_industry_characteristic_interaction_names.json"
     sparse.save_npz(matrix_path, matrix)
@@ -514,10 +536,19 @@ def main() -> None:
         description="Build a no-WRDS paper-style stock-month modeling panel from supplied CRSP/Compustat CSVs."
     )
     parser.add_argument("--chunk-rows", type=int, default=500_000)
-    parser.add_argument("--download-public", action="store_true", help="Download public CCM, Welch-Goyal, and FF inputs.")
+    parser.add_argument(
+        "--download-public",
+        action="store_true",
+        help="Download public CCM, Welch-Goyal, and FF inputs.",
+    )
     parser.add_argument("--overwrite-downloads", action="store_true")
     parser.add_argument("--skip-sparse-industry-interactions", action="store_true")
-    parser.add_argument("--max-chunks-per-file", type=int, default=None, help="Smoke-test limiter; omit for full data.")
+    parser.add_argument(
+        "--max-chunks-per-file",
+        type=int,
+        default=None,
+        help="Smoke-test limiter; omit for full data.",
+    )
     args = parser.parse_args()
 
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
@@ -531,8 +562,8 @@ def main() -> None:
     panel.to_parquet(panel_path, index=False)
 
     if not args.skip_sparse_industry_interactions:
-        manifest["industry_characteristic_sparse_interactions"] = write_sparse_industry_interactions(
-            panel, manifest["industry_dummies"]
+        manifest["industry_characteristic_sparse_interactions"] = (
+            write_sparse_industry_interactions(panel, manifest["industry_dummies"])
         )
 
     manifest_path = PROCESSED_DIR / "no_wrds_model_panel_manifest.json"

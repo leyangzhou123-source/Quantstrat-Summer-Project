@@ -1,0 +1,58 @@
+project:
+  name: quantstrat_ml_asset_pricing
+  random_seed: 42
+
+data:
+  frequency: monthly
+  date_column: month
+  asset_id_column: permno
+  target_column: ret_excess_lead1
+  weight_column: me
+  industry_column: sic2
+  processed_panel_path: data/processed/model_penal.parquet
+  manifest_path: data/processed/model_penal_manifest.json
+
+features:
+  feature_set: no_interactions
+  macro_predictors: [dp, ep, bm, ntis, tbl, tms, dfy, svar]
+
+splits:
+  scheme: paper_rolling
+  train_start: "1957-03-31"
+  validation_years: 12
+  first_test_year: 1987
+  last_test_year: 1988
+
+models:
+  enabled: [transformer_nn]
+
+model_params:
+  transformer_nn:
+    scale_features: true
+    use_sample_weight: true
+    weighted_validation: true
+    forecast_clip: [-0.05, 0.05]
+    prediction_batch_size: 65536
+    progress_every: 1
+    ensemble_seeds: [42]
+    device: auto
+    head_batch_size: 8192
+    training_epochs: 3
+    head_n_iter_no_change: 2
+    validation_grid:
+      n_tokens: [6, 12]
+      d_model: [8]
+      n_heads: [1]
+      n_layers: [1]
+      dropout: [0.0]
+      head_layers:
+        - [16]
+      weight_decay: [0.001]
+      learning_rate: [0.001]
+
+evaluation:
+  benchmark_forecast: zero
+  weighted_oos_r2: true
+  portfolio_deciles: 10
+  annualization_factor: 12
+  newey_west_lags: 12

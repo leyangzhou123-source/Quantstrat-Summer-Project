@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from importlib import import_module
-import json
 from pathlib import Path
 from typing import Any
 
@@ -62,7 +62,7 @@ class ResearchEngine:
         cls,
         config_path: str | Path = "configs/default.yaml",
         project_root: str | Path = ".",
-    ) -> "ResearchEngine":
+    ) -> ResearchEngine:
         return cls(load_config(config_path), project_root=project_root)
 
     def run(self) -> EngineResult:
@@ -119,7 +119,7 @@ class ResearchEngine:
                 {
                     "model": model_name,
                     "test_year": "pooled",
-                    "test_rows": int(len(group)),
+                    "test_rows": len(group),
                     "test_oos_r2": out_of_sample_r2(
                         group[self.schema.target],
                         group["forecast"],
@@ -197,20 +197,87 @@ class ResearchEngine:
         if configured:
             return list(configured)
 
+        feature_set = feature_config.get("feature_set", "baseline")
         manifest_path = self.project_root / self.config["data"].get(
             "manifest_path", "data/processed/model_panel_manifest.json"
         )
         if not manifest_path.exists():
-            return None
+            return self.features_from_panel_schema(feature_set)
         manifest = json.loads(manifest_path.read_text())
-        feature_set = feature_config.get("feature_set", "baseline")
-        macro_cols = [
-            f"macro_{name}"
-            for name in feature_config.get("macro_predictors", [])
-        ]
+        macro_cols = [f"macro_{name}" for name in feature_config.get("macro_predictors", [])]
         if not macro_cols:
             macro_cols = manifest.get("macro_predictors", [])
         return self.features_from_manifest(manifest, macro_cols, feature_set=feature_set)
+
+    def features_from_panel_schema(self, feature_set: str = "baseline") -> list[str] | None:
+        """Infer model features when the panel parquet is present but the manifest is not."""
+        try:
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+        except ImportError:
+            return None
+
+        panel_path = self.project_root / self.config["data"]["processed_panel_path"]
+        if not panel_path.exists():
+            return None
+
+        schema = pq.read_schema(panel_path)
+        excluded = {
+            self.schema.date,
+            self.schema.asset_id,
+            self.schema.target,
+            self.schema.weight,
+            self.schema.industry,
+            "permco",
+            "date",
+            "yyyymm",
+            "ret",
+            "retx",
+            "prc",
+            "shrout",
+            "vol",
+            "ticker",
+            "comnam",
+            "shrcd",
+            "exchcd",
+            "siccd",
+            "rf_welch_goyal",
+            "ret_excess",
+            "mktrf",
+            "smb",
+            "hml",
+            "rmw",
+            "cma",
+            "umd",
+            "rf_fama_french",
+            "model",
+            "forecast",
+        }
+        numeric_columns = [
+            field.name
+            for field in schema
+            if (
+                pa.types.is_integer(field.type)
+                or pa.types.is_floating(field.type)
+                or pa.types.is_boolean(field.type)
+            )
+            and field.name not in excluded
+        ]
+        if feature_set == "ols_3":
+            return [column for column in ["mvel1", "bm", "mom12m"] if column in numeric_columns]
+        if feature_set == "characteristics":
+            return [
+                column
+                for column in numeric_columns
+                if not column.startswith("macro_")
+                and not column.startswith("sic2_")
+                and "__x__" not in column
+            ]
+        if feature_set == "no_interactions":
+            return [column for column in numeric_columns if "__x__" not in column]
+        if feature_set == "baseline":
+            return numeric_columns
+        raise ValueError(f"Unknown features.feature_set: {feature_set!r}")
 
     @staticmethod
     def features_from_manifest(
@@ -253,15 +320,22 @@ class ResearchEngine:
         first_test_year = int(split_config.get("first_test_year", 1987))
         last_test_year = int(split_config.get("last_test_year", 2016))
         validation_years = int(split_config.get("validation_years", 12))
+        test_years = int(split_config.get("test_years", 1))
+        step_years = int(split_config.get("step_years", test_years))
+        if test_years < 1:
+            raise ValueError("splits.test_years must be at least 1")
+        if step_years < 1:
+            raise ValueError("splits.step_years must be at least 1")
         splits = []
-        for test_year in range(first_test_year, last_test_year + 1):
+        for test_year in range(first_test_year, last_test_year + 1, step_years):
+            test_end_year = min(test_year + test_years - 1, last_test_year)
             train_end_year = test_year - validation_years - 1
             validation_start_year = test_year - validation_years
             train_end = pd.Timestamp(f"{train_end_year}-12-31")
             validation_start = pd.Timestamp(f"{validation_start_year}-01-01")
             validation_end = pd.Timestamp(f"{test_year - 1}-12-31")
             test_start = pd.Timestamp(f"{test_year}-01-01")
-            test_end = pd.Timestamp(f"{test_year}-12-31")
+            test_end = pd.Timestamp(f"{test_end_year}-12-31")
             splits.append(
                 PaperRollingSplit(
                     test_year=test_year,
@@ -338,7 +412,9 @@ class ResearchEngine:
             weight_column=self.schema.weight,
         )
 
-    def model_feature_columns(self, model_config: dict[str, Any], default_features: list[str]) -> list[str]:
+    def model_feature_columns(
+        self, model_config: dict[str, Any], default_features: list[str]
+    ) -> list[str]:
         if model_config.get("features"):
             return list(model_config["features"])
         feature_set = model_config.get("feature_set")
@@ -351,8 +427,7 @@ class ResearchEngine:
             raise ValueError(f"Cannot use model feature_set without manifest: {manifest_path}")
         manifest = json.loads(manifest_path.read_text())
         macro_cols = [
-            f"macro_{name}"
-            for name in self.config.get("features", {}).get("macro_predictors", [])
+            f"macro_{name}" for name in self.config.get("features", {}).get("macro_predictors", [])
         ]
         if not macro_cols:
             macro_cols = manifest.get("macro_predictors", [])
@@ -374,7 +449,7 @@ class ResearchEngine:
         forecast = result.predictions.reindex(test.index)
         metrics = {
             "model": result.model_name,
-            "test_rows": int(len(test)),
+            "test_rows": len(test),
             "test_oos_r2": out_of_sample_r2(
                 test[self.schema.target],
                 forecast,
@@ -405,6 +480,7 @@ class ResearchEngine:
             "nn3": "NN3",
             "nn4": "NN4",
             "nn5": "NN5",
+            "transformer_nn": "TransformerNN",
         }
         try:
             return module_names[model_name]

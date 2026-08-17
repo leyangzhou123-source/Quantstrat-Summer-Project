@@ -2,15 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-from pathlib import Path
 import zipfile
+from pathlib import Path
+from urllib.request import Request, urlopen
 
 import numpy as np
 import pandas as pd
 import polars as pl
-from urllib.request import Request, urlopen
-
 
 ROOT = Path(__file__).resolve().parents[2]
 PROCESSED_DIR = ROOT / "data" / "processed"
@@ -43,22 +41,21 @@ def write_gkx_stage(
     usecols = ["permno", "DATE", "sic2", *stock_characteristics]
     writer = None
     try:
-        with zipfile.ZipFile(zip_path) as archive:
-            with archive.open("datashare.csv") as handle:
-                for chunk in pd.read_csv(handle, usecols=usecols, chunksize=chunksize):
-                    chunk["yyyymm"] = (chunk["DATE"].astype("int64") // 100).astype("int64")
-                    chunk = chunk[
-                        (chunk["yyyymm"] >= start_yyyymm) & (chunk["yyyymm"] <= end_yyyymm)
-                    ].drop(columns=["DATE"])
-                    if chunk.empty:
-                        continue
-                    chunk["permno"] = chunk["permno"].astype("int64")
-                    table = pl.from_pandas(chunk).to_arrow()
-                    if writer is None:
-                        import pyarrow.parquet as pq
+        with zipfile.ZipFile(zip_path) as archive, archive.open("datashare.csv") as handle:
+            for chunk in pd.read_csv(handle, usecols=usecols, chunksize=chunksize):
+                chunk["yyyymm"] = (chunk["DATE"].astype("int64") // 100).astype("int64")
+                chunk = chunk[
+                    (chunk["yyyymm"] >= start_yyyymm) & (chunk["yyyymm"] <= end_yyyymm)
+                ].drop(columns=["DATE"])
+                if chunk.empty:
+                    continue
+                chunk["permno"] = chunk["permno"].astype("int64")
+                table = pl.from_pandas(chunk).to_arrow()
+                if writer is None:
+                    import pyarrow.parquet as pq
 
-                        writer = pq.ParquetWriter(output_path, table.schema, compression="zstd")
-                    writer.write_table(table)
+                    writer = pq.ParquetWriter(output_path, table.schema, compression="zstd")
+                writer.write_table(table)
     finally:
         if writer is not None:
             writer.close()
@@ -68,17 +65,18 @@ def rank_gkx_characteristics(stage_path: Path, stock_characteristics: list[str])
     base = pl.scan_parquet(stage_path)
     filled = base.with_columns(
         [
-            pl.col(col)
-            .fill_null(pl.col(col).median().over("yyyymm"))
-            .fill_null(0.0)
-            .alias(col)
+            pl.col(col).fill_null(pl.col(col).median().over("yyyymm")).fill_null(0.0).alias(col)
             for col in stock_characteristics
         ]
     )
     n_by_month = pl.len().over("yyyymm")
     return filled.with_columns(
         [
-            (-1.0 + 2.0 * (pl.col(col).rank(method="average").over("yyyymm") / n_by_month))
+            (
+                -1.0
+                + 2.0
+                * ((pl.col(col).rank(method="average").over("yyyymm") - 1.0) / (n_by_month - 1.0))
+            )
             .cast(pl.Float32)
             .alias(col)
             for col in stock_characteristics
@@ -124,7 +122,9 @@ def build_clean_panel(
     if min_target is not None or max_target is not None:
         low = -float("inf") if min_target is None else float(min_target)
         high = float("inf") if max_target is None else float(max_target)
-        joined = joined.with_columns(pl.col(manifest["target"]).clip(low, high).alias(manifest["target"]))
+        joined = joined.with_columns(
+            pl.col(manifest["target"]).clip(low, high).alias(manifest["target"])
+        )
 
     observed_sic2 = (
         joined.select("sic2")
@@ -156,33 +156,46 @@ def build_clean_panel(
     )
 
     clean = pl.scan_parquet(output_path)
-    audit = clean.select(
-        [
-            pl.len().alias("rows"),
-            pl.struct(["permno", "yyyymm"]).n_unique().alias("unique_permno_yyyymm"),
-            pl.col("permno").n_unique().alias("permnos"),
-            pl.col("yyyymm").n_unique().alias("months"),
-            pl.col("yyyymm").min().alias("yyyymm_start"),
-            pl.col("yyyymm").max().alias("yyyymm_end"),
-            (pl.col("me") <= 0).sum().alias("me_nonpositive"),
-            pl.sum_horizontal([pl.col(c) for c in industry_cols]).eq(1).sum().alias("industry_one_hot"),
-            pl.sum_horizontal([pl.col(c) for c in industry_cols]).eq(0).sum().alias("industry_no_dummy"),
-            pl.sum_horizontal([pl.col(c) for c in industry_cols]).gt(1).sum().alias("industry_multi_dummy"),
-            pl.sum_horizontal([pl.col(c).is_null().cast(pl.Int64) for c in stock_characteristics]).alias(
-                "characteristic_null_cells"
-            ),
-            pl.sum_horizontal([(~pl.col(c).is_between(-1, 1)).cast(pl.Int64) for c in stock_characteristics]).alias(
-                "characteristic_outside_rank_cells"
-            ),
-            pl.sum_horizontal([pl.col(c).is_null().cast(pl.Int64) for c in macro_predictors]).alias(
-                "macro_null_cells"
-            ),
-            pl.col(manifest["target"]).min().alias("target_min"),
-            pl.col(manifest["target"]).max().alias("target_max"),
-            (pl.col(manifest["target"]).abs() > 1).sum().alias("target_abs_gt_100pct"),
-            (pl.col(manifest["target"]).abs() > 5).sum().alias("target_abs_gt_500pct"),
-        ]
-    ).collect().to_dicts()[0]
+    audit = (
+        clean.select(
+            [
+                pl.len().alias("rows"),
+                pl.struct(["permno", "yyyymm"]).n_unique().alias("unique_permno_yyyymm"),
+                pl.col("permno").n_unique().alias("permnos"),
+                pl.col("yyyymm").n_unique().alias("months"),
+                pl.col("yyyymm").min().alias("yyyymm_start"),
+                pl.col("yyyymm").max().alias("yyyymm_end"),
+                (pl.col("me") <= 0).sum().alias("me_nonpositive"),
+                pl.sum_horizontal([pl.col(c) for c in industry_cols])
+                .eq(1)
+                .sum()
+                .alias("industry_one_hot"),
+                pl.sum_horizontal([pl.col(c) for c in industry_cols])
+                .eq(0)
+                .sum()
+                .alias("industry_no_dummy"),
+                pl.sum_horizontal([pl.col(c) for c in industry_cols])
+                .gt(1)
+                .sum()
+                .alias("industry_multi_dummy"),
+                pl.sum_horizontal(
+                    [pl.col(c).is_null().cast(pl.Int64) for c in stock_characteristics]
+                ).alias("characteristic_null_cells"),
+                pl.sum_horizontal(
+                    [(~pl.col(c).is_between(-1, 1)).cast(pl.Int64) for c in stock_characteristics]
+                ).alias("characteristic_outside_rank_cells"),
+                pl.sum_horizontal(
+                    [pl.col(c).is_null().cast(pl.Int64) for c in macro_predictors]
+                ).alias("macro_null_cells"),
+                pl.col(manifest["target"]).min().alias("target_min"),
+                pl.col(manifest["target"]).max().alias("target_max"),
+                (pl.col(manifest["target"]).abs() > 1).sum().alias("target_abs_gt_100pct"),
+                (pl.col(manifest["target"]).abs() > 5).sum().alias("target_abs_gt_500pct"),
+            ]
+        )
+        .collect()
+        .to_dicts()[0]
+    )
 
     clean_manifest = dict(manifest)
     clean_manifest["panel"] = str(output_path.relative_to(ROOT))
@@ -209,7 +222,9 @@ def build_clean_panel(
         clean_manifest["processing"].append(
             f"Clipped {manifest['target']} to [{min_target}, {max_target}]."
         )
-    clean_manifest["completeness"] = {k: int(v) if isinstance(v, (np.integer, int)) else v for k, v in audit.items()}
+    clean_manifest["completeness"] = {
+        k: int(v) if isinstance(v, (np.integer, int)) else v for k, v in audit.items()
+    }
     output_manifest_path.write_text(json.dumps(clean_manifest, indent=2) + "\n")
     return audit
 
@@ -217,15 +232,23 @@ def build_clean_panel(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build a GKX-aligned clean model_penal parquet.")
     parser.add_argument("--current", type=Path, default=PROCESSED_DIR / "model_penal.parquet")
-    parser.add_argument("--manifest", type=Path, default=PROCESSED_DIR / "model_penal_manifest.json")
-    parser.add_argument("--output", type=Path, default=PROCESSED_DIR / "model_penal_gkx_clean.parquet")
+    parser.add_argument(
+        "--manifest", type=Path, default=PROCESSED_DIR / "model_penal_manifest.json"
+    )
+    parser.add_argument(
+        "--output", type=Path, default=PROCESSED_DIR / "model_penal_gkx_clean.parquet"
+    )
     parser.add_argument(
         "--output-manifest",
         type=Path,
         default=PROCESSED_DIR / "model_penal_gkx_clean_manifest.json",
     )
-    parser.add_argument("--zip-path", type=Path, default=Path("/private/tmp/gkx_datashare_clean_build.zip"))
-    parser.add_argument("--stage-path", type=Path, default=Path("/private/tmp/gkx_datashare_clean_stage.parquet"))
+    parser.add_argument(
+        "--zip-path", type=Path, default=Path("/private/tmp/gkx_datashare_clean_build.zip")
+    )
+    parser.add_argument(
+        "--stage-path", type=Path, default=Path("/private/tmp/gkx_datashare_clean_stage.parquet")
+    )
     parser.add_argument("--chunksize", type=int, default=500_000)
     parser.add_argument("--min-target", type=float, default=-1.0)
     parser.add_argument("--max-target", type=float, default=1.0)

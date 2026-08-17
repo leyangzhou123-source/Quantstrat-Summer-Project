@@ -17,4 +17,3 @@ def simple_dm_stat(error_diff: pd.Series) -> float:
     if len(values) < 2 or values.std(ddof=1) == 0:
         return float("nan")
     return float(values.mean() / (values.std(ddof=1) / np.sqrt(len(values))))
-

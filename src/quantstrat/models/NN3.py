@@ -4,8 +4,8 @@ from typing import Any
 
 import pandas as pd
 
-from quantstrat.models.NeuralNetwork import train_validate_predict_depth
 from quantstrat.models.base import ModelResult
+from quantstrat.models.NeuralNetwork import train_validate_predict_depth
 
 
 def train_validate_predict(

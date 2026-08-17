@@ -1,0 +1,140 @@
+project:
+  name: quantstrat_ml_asset_pricing
+  random_seed: 42
+
+data:
+  frequency: monthly
+  date_column: month
+  asset_id_column: permno
+  target_column: ret_excess_lead1
+  weight_column: me
+  industry_column: sic2
+  processed_panel_path: data/processed/model_penal_gkx_clean_rankfix.parquet
+  manifest_path: data/processed/model_penal_gkx_clean_rankfix_manifest.json
+  asset_sample_fraction: 0.35
+  asset_sample_seed: 42
+  max_rows_per_split:
+    train: 120000
+    validation: 60000
+    test: 60000
+
+features:
+  feature_set: no_interactions
+  macro_predictors:
+    - dp
+    - ep
+    - bm
+    - ntis
+    - tbl
+    - tms
+    - dfy
+    - svar
+
+splits:
+  scheme: paper_rolling
+  train_start: "1957-03-31"
+  validation_years: 12
+  first_test_year: 1987
+  last_test_year: 2016
+
+models:
+  enabled:
+    - ols_huber
+    - ols_3
+    - pls
+    - pcr
+    - elastic_net_huber
+    - glm_huber
+    - random_forest
+    - gbrt_huber
+
+model_params:
+  common_light: &common_light
+    use_sample_weight: false
+    weighted_validation: false
+    drop_features_after_matrix: true
+    standardize_target: true
+    forecast_clip: [-0.05, 0.05]
+
+  ols_huber:
+    <<: *common_light
+    fit_intercept: true
+    scale_features: true
+    max_iter: 600
+    tol: 0.0002
+    validation_grid:
+      epsilon: [0.1]
+      eta0: [0.0001]
+
+  ols_3:
+    <<: *common_light
+    model_name: ols_3
+    feature_set: ols_3
+    fit_intercept: true
+    solver: sklearn
+    scale_features: true
+
+  pls:
+    <<: *common_light
+    scale_features: true
+    max_iter: 200
+    tol: 0.000001
+    validation_grid:
+      n_components: [3, 5]
+
+  pcr:
+    <<: *common_light
+    backend: jax
+    scale_features: true
+    validation_grid:
+      n_components: [5, 10]
+      alpha: [100000000.0]
+
+  elastic_net_huber:
+    <<: *common_light
+    scale_features: true
+    max_iter: 600
+    tol: 0.0002
+    validation_grid:
+      alpha: [0.0001]
+      l1_ratio: [0.1, 0.5]
+      epsilon: [0.1]
+
+  glm_huber:
+    <<: *common_light
+    scale_features: true
+    degree: 2
+    max_iter: 500
+    tol: 0.0002
+    validation_grid:
+      n_knots: [3]
+      alpha: [0.0001]
+      l1_ratio: [0.5]
+      epsilon: [0.1]
+
+  random_forest:
+    <<: *common_light
+    n_jobs: -1
+    scale_features: false
+    validation_grid:
+      n_estimators: [25]
+      max_depth: [3]
+      min_samples_leaf: [500]
+      max_features: [sqrt]
+
+  gbrt_huber:
+    <<: *common_light
+    scale_features: false
+    validation_grid:
+      n_estimators: [15]
+      learning_rate: [0.05]
+      max_depth: [2]
+      min_samples_leaf: [500]
+      max_features: [sqrt]
+
+evaluation:
+  benchmark_forecast: zero
+  weighted_oos_r2: false
+  portfolio_deciles: 10
+  annualization_factor: 12
+  newey_west_lags: 12

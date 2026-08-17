@@ -14,8 +14,32 @@ portfolio performance.
 The paper studies roughly 30,000 stocks from 1957 to 2016, using 94 firm
 characteristics, eight macro predictors, 74 industry dummies, and machine
 learning models that range from linear baselines to trees and neural networks.
-This codebase mirrors that structure, but many files are still scaffolding
-waiting for vendor-specific data and concrete model adapters.
+This codebase mirrors that structure with a local, no-WRDS workflow built
+around processed parquet panels and rolling out-of-sample model runners.
+
+## Quick Start
+
+Create an environment and install the project dependencies:
+
+```bash
+python -m pip install -e ".[dev,models]"
+```
+
+Run the lightweight test suite:
+
+```bash
+python -m ruff check src scripts strategy tests
+python -m pytest
+```
+
+Run the paper-style rolling model engine with the rank-fixed model panel:
+
+```bash
+python -u scripts/run_paper_rolling_models.py \
+  --config configs/paper_all_models_no_interactions_gkx_clean_rankfix_nonconstant.yaml \
+  --models ols ridge elastic_net pcr random_forest nn1 nn2 nn3 nn4 nn5 \
+  --out-prefix gkx_clean_rankfix_no_interactions
+```
 
 ## What Goes Where
 
@@ -25,8 +49,9 @@ waiting for vendor-specific data and concrete model adapters.
 |-- eHtkga-hhaa009.pdf
 |-- pyproject.toml
 |-- configs/
+|   |-- README.md
 |   |-- default.toml
-|   `-- default.yaml
+|   `-- *.yaml
 |-- data/
 |   `-- README.md
 |-- docs/
@@ -34,7 +59,15 @@ waiting for vendor-specific data and concrete model adapters.
 |-- reports/
 |   `-- README.md
 |-- scripts/
-|   `-- run_pipeline.py
+|   |-- README.md
+|   |-- run_paper_rolling_models.py
+|   |-- run_pipeline.py
+|   |-- data_processing/
+|   |-- modeling/
+|   |-- feature_engineering/
+|   |-- reporting/
+|   `-- experiments/
+|-- strategy/
 |-- src/
 |   `-- quantstrat/
 |       |-- data/
@@ -66,6 +99,8 @@ waiting for vendor-specific data and concrete model adapters.
 - `configs/default.yaml`: a YAML mirror of the default settings. Keep it in
   sync only if you need YAML for notebooks, external tools, or documentation.
   The current Python loader reads the TOML file.
+- `configs/README.md`: naming convention for paper, smoke/local, rank-fixed,
+  no-interaction, and transformer configs.
 
 ### Data
 
@@ -76,9 +111,11 @@ waiting for vendor-specific data and concrete model adapters.
   files, risk-free rates, and metadata.
 - `data/interim/`: cleaned intermediate outputs that are not yet modeling-ready.
 - `data/processed/`: final monthly panel files. The expected modeling panel has
-  one row per stock-month and includes `date`, `permno`,
-  `ret_excess_lead1`, optional `market_equity`, optional `sic2`, ranked firm
-  characteristics, macro predictors, interaction terms, and industry dummies.
+  one row per stock-month and includes `month`, `permno`,
+  `ret_excess_lead1`, market-equity weights, industry codes or dummies, ranked
+  firm characteristics, and macro predictors. Interaction-expanded panels can
+  be generated separately, but the main GitHub workflow uses the smaller
+  no-interaction panel.
 
 ### Documentation
 
@@ -97,10 +134,22 @@ waiting for vendor-specific data and concrete model adapters.
 
 ### Scripts
 
-- `scripts/run_pipeline.py`: the command-line entry point. It currently loads
-  the TOML config and prints enabled models. As the project matures, this file
-  should orchestrate ingestion, feature assembly, rolling splits, model tuning,
-  out-of-sample prediction, evaluation, and report generation.
+- `scripts/run_paper_rolling_models.py`: the main rolling train, validation,
+  prediction, and summary entry point. This is a stable wrapper used by VM
+  commands; the implementation lives in `scripts/modeling/`.
+- `scripts/run_pipeline.py`: a smaller orchestration helper for configured
+  workflow checks.
+- `scripts/data_processing/`: model-panel construction and merge scripts.
+- `scripts/modeling/`: rolling model-training implementations.
+- `scripts/feature_engineering/`: characteristic ranking, NN5 feature
+  experiments, and rank-optimized feature research.
+- `scripts/reporting/`: report generation utilities.
+- `scripts/experiments/`: shell launchers and one-off experiment runs.
+
+### Strategy
+
+- `strategy/`: portfolio construction and strategy-optimization scripts that
+  consume saved prediction parquet files.
 
 ### Source Package
 
@@ -129,12 +178,12 @@ waiting for vendor-specific data and concrete model adapters.
 
 #### `src/quantstrat/models/`
 
-- `registry.py`: model family metadata and the `ModelAdapter` protocol. Add
-  concrete adapters or specs for OLS, OLS-3, elastic net with Huber loss, PCR,
-  PLS, random forest, boosted trees, and neural networks.
-- `splits.py`: time-ordered rolling train/validation/test split construction.
-  This protects the paper's out-of-sample design by avoiding random shuffles
-  and future leakage.
+- `registry.py`: model family metadata and adapter lookup for OLS, OLS-3,
+  elastic net, PCR, PLS, random forest, boosted trees, neural networks, and the
+  transformer-style tabular neural model.
+- Rolling split construction lives in `src/quantstrat/Engine/engine.py`. This
+  protects the paper's out-of-sample design by avoiding random shuffles and
+  future leakage.
 - `train.py`: generic fit-and-predict wrapper for model adapters. Expand this
   with validation tuning, prediction storage, and split-by-split execution.
 - `__init__.py`: package marker for model utilities.
@@ -168,6 +217,7 @@ waiting for vendor-specific data and concrete model adapters.
   out-of-sample R2.
 - `tests/test_splits.py`: focused tests for rolling split behavior and temporal
   ordering.
+- `tests/test_ranking.py`: focused tests for cross-sectional rank scaling.
 
 Add tests whenever a file starts carrying real project logic, especially for
 date handling, panel validation, feature construction, split boundaries,
@@ -192,11 +242,8 @@ benchmark forecasts, and portfolio sorting edge cases.
 11. Report Sharpe ratios, portfolio returns, variable importance, and marginal
     relationships.
 
-## First Implementation Targets
+## GitHub Hygiene
 
-- Replace placeholder data paths in `configs/default.toml`.
-- Implement vendor-specific ingestion in `src/quantstrat/data/ingest.py`.
-- Build the final monthly modeling panel under `data/processed/`.
-- Add concrete model adapters for the paper's model families.
-- Extend `scripts/run_pipeline.py` into a full orchestration entry point.
-- Generate tables and figures under `reports/`.
+Large local parquet panels, model predictions, strategy outputs, bytecode, and
+OS metadata are ignored by `.gitignore`. Commit source code, configs, tests, and
+small summary CSV/report files only.

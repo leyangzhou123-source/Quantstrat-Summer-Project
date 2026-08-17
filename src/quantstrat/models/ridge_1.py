@@ -27,11 +27,10 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from evaluation import evaluate_on_test, out_of_sample_r2, save_results
+from pipeline import RAW_DIR, FeatureBuilder, prepare_model_data
 from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
-
-from pipeline import RAW_DIR, FeatureBuilder, prepare_model_data
-from evaluation import evaluate_on_test, out_of_sample_r2, save_results
 
 TARGET = "ret_excess_lead1"
 DEFAULT_ALPHAS = [0.01, 0.1, 1.0, 10.0, 100.0, 1_000.0, 10_000.0, 100_000.0]
@@ -48,19 +47,34 @@ def predict_in_chunks(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--alphas", type=float, nargs="+", default=DEFAULT_ALPHAS,
-                        help="Ridge regularization strengths to tune on validation.")
-    parser.add_argument("--raw-dir", type=Path, default=RAW_DIR,
-                        help="Directory holding the five raw data files.")
-    parser.add_argument("--processed-panel", type=Path, default=None,
-                        help="Optional prebuilt data/processed/model_panel.parquet.")
-    parser.add_argument("--sample-rows", type=int, default=None,
-                        help="Optional row cap for quick experiments.")
-    parser.add_argument("--no-interactions", action="store_true",
-                        help="Drop characteristic x macro interaction features.")
+    parser.add_argument(
+        "--alphas",
+        type=float,
+        nargs="+",
+        default=DEFAULT_ALPHAS,
+        help="Ridge regularization strengths to tune on validation.",
+    )
+    parser.add_argument(
+        "--raw-dir", type=Path, default=RAW_DIR, help="Directory holding the five raw data files."
+    )
+    parser.add_argument(
+        "--processed-panel",
+        type=Path,
+        default=None,
+        help="Optional prebuilt data/processed/model_panel.parquet.",
+    )
+    parser.add_argument(
+        "--sample-rows", type=int, default=None, help="Optional row cap for quick experiments."
+    )
+    parser.add_argument(
+        "--no-interactions",
+        action="store_true",
+        help="Drop characteristic x macro interaction features.",
+    )
     parser.add_argument("--output-dir", type=Path, default=None)
-    parser.add_argument("--smoke", action="store_true",
-                        help="Run end-to-end on generated synthetic data.")
+    parser.add_argument(
+        "--smoke", action="store_true", help="Run end-to-end on generated synthetic data."
+    )
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 

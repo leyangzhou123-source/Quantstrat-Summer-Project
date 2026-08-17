@@ -40,7 +40,9 @@ def _prepare_arrays(
     features: list[str],
     config: dict[str, Any],
     weight_column: str | None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, pd.Series, pd.Series | None]:
+) -> tuple[
+    np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, pd.Series, pd.Series | None
+]:
     x_train = _feature_matrix(train, features, copy=config.get("copy_features", False))
     x_validation = _feature_matrix(validation, features, copy=config.get("copy_features", False))
     x_test = _feature_matrix(test, features, copy=config.get("copy_features", False))
@@ -63,9 +65,7 @@ def _prepare_arrays(
         test.drop(columns=features, inplace=True, errors="ignore")
         gc.collect()
     if config.get("scale_features", True):
-        x_train, x_validation, x_test = _scale_train_validation_test(
-            x_train, x_validation, x_test
-        )
+        x_train, x_validation, x_test = _scale_train_validation_test(x_train, x_validation, x_test)
     return (
         x_train,
         x_validation,
@@ -94,7 +94,9 @@ def _jax_weighted_ridge_coefficients(
     y_weighted = y_train * root_weights.reshape((-1,))
     xtx = x_weighted.T @ x_weighted
     xty = x_weighted.T @ y_weighted
-    penalty = jnp.eye(xtx.shape[0], dtype=xtx.dtype) * jnp.asarray(alpha + ridge_jitter, dtype=xtx.dtype)
+    penalty = jnp.eye(xtx.shape[0], dtype=xtx.dtype) * jnp.asarray(
+        alpha + ridge_jitter, dtype=xtx.dtype
+    )
     if fit_intercept:
         penalty = penalty.at[0, 0].set(0.0)
     return jnp.linalg.solve(xtx + penalty, xty)

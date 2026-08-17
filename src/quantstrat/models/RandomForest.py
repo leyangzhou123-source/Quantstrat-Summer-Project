@@ -25,9 +25,7 @@ def train_validate_predict(
         return RandomForestRegressor(
             n_estimators=candidate.get("n_estimators", config.get("n_estimators", 100)),
             max_depth=candidate.get("max_depth", config.get("max_depth", 6)),
-            min_samples_leaf=candidate.get(
-                "min_samples_leaf", config.get("min_samples_leaf", 100)
-            ),
+            min_samples_leaf=candidate.get("min_samples_leaf", config.get("min_samples_leaf", 100)),
             max_features=candidate.get("max_features", config.get("max_features", "sqrt")),
             max_samples=candidate.get("max_samples", config.get("max_samples")),
             n_jobs=config.get("n_jobs", -1),

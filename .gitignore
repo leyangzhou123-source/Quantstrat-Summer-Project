@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/
+
+# Local data and generated research artifacts
+data/raw/
+data/interim/
+data/external/
+data/processed/*.parquet
+data/processed/*_manifest.json
+reports/model_runs/
+reports/strategies/
+reports/feature_engineering/
+reports/project_reports/
+reports/project_reports/*.inspect.ndjson
+reports/project_reports/*/
+docs/*.docx
+
+# Logs and temporary run files
+*.log
+*log*.jsonl
+*_log.jsonl
+*training*

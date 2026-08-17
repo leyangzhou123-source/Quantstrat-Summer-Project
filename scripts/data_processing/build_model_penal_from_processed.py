@@ -9,7 +9,6 @@ import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-
 ROOT = Path(__file__).resolve().parents[2]
 PROCESSED_DIR = ROOT / "data" / "processed"
 
@@ -63,7 +62,9 @@ def industry_dummy_columns(path: Path) -> list[str]:
 
 def add_yyyymm_from_month(frame: pl.LazyFrame) -> pl.LazyFrame:
     return frame.with_columns(
-        (pl.col("month").dt.year() * 100 + pl.col("month").dt.month()).cast(pl.Int64).alias("yyyymm")
+        (pl.col("month").dt.year() * 100 + pl.col("month").dt.month())
+        .cast(pl.Int64)
+        .alias("yyyymm")
     )
 
 
@@ -82,17 +83,18 @@ def ranked_characteristics(path: Path, char_cols: list[str]) -> pl.LazyFrame:
     base = pl.scan_parquet(path).select(KEY_COLUMNS + char_cols)
     filled = base.with_columns(
         [
-            pl.col(col)
-            .fill_null(pl.col(col).median().over("yyyymm"))
-            .fill_null(0.0)
-            .alias(col)
+            pl.col(col).fill_null(pl.col(col).median().over("yyyymm")).fill_null(0.0).alias(col)
             for col in char_cols
         ]
     )
     n_by_month = pl.len().over("yyyymm")
     return filled.with_columns(
         [
-            (-1.0 + 2.0 * (pl.col(col).rank(method="average").over("yyyymm") / n_by_month)).alias(col)
+            (
+                -1.0
+                + 2.0
+                * ((pl.col(col).rank(method="average").over("yyyymm") - 1.0) / (n_by_month - 1.0))
+            ).alias(col)
             for col in char_cols
         ]
     )
@@ -156,8 +158,10 @@ def collect_year_batch(
         .filter(pl.col("yyyymm").is_between(start_yyyymm, end_yyyymm))
         .select(KEY_COLUMNS + ["sic2"] + industry_cols)
     )
-    ff = pl.scan_parquet(ff_path).rename({"rf": "rf_fama_french"}).select(
-        ["yyyymm", "mktrf", "smb", "hml", "rmw", "cma", "umd", "rf_fama_french"]
+    ff = (
+        pl.scan_parquet(ff_path)
+        .rename({"rf": "rf_fama_french"})
+        .select(["yyyymm", "mktrf", "smb", "hml", "rmw", "cma", "umd", "rf_fama_french"])
     )
     batch = (
         base.join(chars, on=KEY_COLUMNS, how="inner")
@@ -229,7 +233,9 @@ def build_model_penal(
 ) -> dict:
     char_cols = characteristic_columns(characteristics_path)
     industry_cols = industry_dummy_columns(industry_path)
-    macro_interactions = [f"{char_col}__x__{macro_col}" for char_col in char_cols for macro_col in MACRO_COLUMNS]
+    macro_interactions = [
+        f"{char_col}__x__{macro_col}" for char_col in char_cols for macro_col in MACRO_COLUMNS
+    ]
 
     print("Staging returns with next-month excess-return target", flush=True)
     stage_returns_target(returns_path, macro_path, returns_target_path)
@@ -257,22 +263,39 @@ def build_model_penal(
             pl.col("month").max().alias("max_month"),
             pl.col("ret_excess_lead1").null_count().alias("target_nulls"),
             pl.col("me").null_count().alias("market_equity_nulls"),
-            pl.sum_horizontal([pl.col(c).null_count() for c in char_cols]).alias("characteristic_null_cells"),
-            pl.sum_horizontal([pl.col(c).null_count() for c in MACRO_COLUMNS]).alias("macro_null_cells"),
-            pl.sum_horizontal([pl.col(c).null_count() for c in macro_interactions]).alias("macro_interaction_null_cells"),
-            pl.sum_horizontal([pl.col(c).null_count() for c in industry_cols]).alias("industry_dummy_null_cells"),
-            pl.min_horizontal([pl.col(c).min() for c in char_cols]).alias("ranked_characteristic_min"),
-            pl.max_horizontal([pl.col(c).max() for c in char_cols]).alias("ranked_characteristic_max"),
+            pl.sum_horizontal([pl.col(c).null_count() for c in char_cols]).alias(
+                "characteristic_null_cells"
+            ),
+            pl.sum_horizontal([pl.col(c).null_count() for c in MACRO_COLUMNS]).alias(
+                "macro_null_cells"
+            ),
+            pl.sum_horizontal([pl.col(c).null_count() for c in macro_interactions]).alias(
+                "macro_interaction_null_cells"
+            ),
+            pl.sum_horizontal([pl.col(c).null_count() for c in industry_cols]).alias(
+                "industry_dummy_null_cells"
+            ),
+            pl.min_horizontal([pl.col(c).min() for c in char_cols]).alias(
+                "ranked_characteristic_min"
+            ),
+            pl.max_horizontal([pl.col(c).max() for c in char_cols]).alias(
+                "ranked_characteristic_max"
+            ),
         ]
     ).collect()
 
-    by_month = scan.group_by("yyyymm").agg(pl.len().alias("rows")).select(
-        [
-            pl.col("rows").min().alias("min_rows_per_month"),
-            pl.col("rows").median().alias("median_rows_per_month"),
-            pl.col("rows").max().alias("max_rows_per_month"),
-        ]
-    ).collect()
+    by_month = (
+        scan.group_by("yyyymm")
+        .agg(pl.len().alias("rows"))
+        .select(
+            [
+                pl.col("rows").min().alias("min_rows_per_month"),
+                pl.col("rows").median().alias("median_rows_per_month"),
+                pl.col("rows").max().alias("max_rows_per_month"),
+            ]
+        )
+        .collect()
+    )
 
     manifest = {
         "panel": str(output_path.relative_to(ROOT)),
@@ -300,7 +323,9 @@ def build_model_penal(
         "completeness": {
             "target_nulls": int(completeness["target_nulls"][0]),
             "market_equity_nulls": int(completeness["market_equity_nulls"][0]),
-            "characteristic_null_cells_after_median_fill_and_rank": int(completeness["characteristic_null_cells"][0]),
+            "characteristic_null_cells_after_median_fill_and_rank": int(
+                completeness["characteristic_null_cells"][0]
+            ),
             "macro_null_cells": int(completeness["macro_null_cells"][0]),
             "macro_interaction_null_cells": int(completeness["macro_interaction_null_cells"][0]),
             "industry_dummy_null_cells": int(completeness["industry_dummy_null_cells"][0]),
@@ -333,9 +358,13 @@ def build_model_penal(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build the real paper-style model_penal parquet from processed inputs.")
+    parser = argparse.ArgumentParser(
+        description="Build the real paper-style model_penal parquet from processed inputs."
+    )
     parser.add_argument("--returns", type=Path, default=PROCESSED_DIR / "stock_returns.parquet")
-    parser.add_argument("--characteristics", type=Path, default=PROCESSED_DIR / "stock_characteristics.parquet")
+    parser.add_argument(
+        "--characteristics", type=Path, default=PROCESSED_DIR / "stock_characteristics.parquet"
+    )
     parser.add_argument("--industry", type=Path, default=PROCESSED_DIR / "industry_dummies.parquet")
     parser.add_argument("--macro", type=Path, default=PROCESSED_DIR / "welch_goyal_macros.parquet")
     parser.add_argument("--ff", type=Path, default=PROCESSED_DIR / "fama_french_factors.parquet")
@@ -358,7 +387,22 @@ def main() -> None:
         start_year=args.start_year,
         end_year=args.end_year,
     )
-    print(json.dumps({k: manifest[k] for k in ["panel", "rows", "columns", "yyyymm_start", "yyyymm_end", "total_model_feature_count"]}, indent=2))
+    print(
+        json.dumps(
+            {
+                k: manifest[k]
+                for k in [
+                    "panel",
+                    "rows",
+                    "columns",
+                    "yyyymm_start",
+                    "yyyymm_end",
+                    "total_model_feature_count",
+                ]
+            },
+            indent=2,
+        )
+    )
     print(json.dumps(manifest["completeness"], indent=2))
 
 

@@ -15,4 +15,3 @@ def prediction_drop_importance(
         "ablated_r2": recomputed_r2,
         "importance": baseline_r2 - recomputed_r2,
     }
-

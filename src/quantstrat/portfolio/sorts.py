@@ -27,4 +27,3 @@ def value_weighted_returns(
     grouped = weighted.groupby([date_column, bucket_column])
     result = grouped["_weighted_return"].sum() / grouped[weight_column].sum()
     return result.rename("return").reset_index()
-

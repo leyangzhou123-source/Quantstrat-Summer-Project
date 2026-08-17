@@ -12,7 +12,8 @@ def rank_characteristics(
 ) -> pd.DataFrame:
     ranked = panel.copy()
     grouped = ranked.groupby(date_column, group_keys=False)
-    percentile = grouped[characteristic_columns].rank(pct=True)
-    ranked[characteristic_columns] = low + (high - low) * percentile
+    ranks = grouped[characteristic_columns].rank(method="average", na_option="keep")
+    counts = grouped[characteristic_columns].transform("count")
+    scaled = low + (high - low) * (ranks - 1.0) / (counts - 1.0)
+    ranked[characteristic_columns] = scaled.where(counts > 1)
     return ranked
-

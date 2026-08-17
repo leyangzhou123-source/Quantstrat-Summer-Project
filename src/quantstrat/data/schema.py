@@ -14,4 +14,3 @@ class PanelSchema:
     @property
     def required_columns(self) -> set[str]:
         return {self.date, self.asset_id, self.target}
-

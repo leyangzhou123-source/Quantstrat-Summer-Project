@@ -31,10 +31,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestRegressor
-
-from pipeline import RAW_DIR, FeatureBuilder, prepare_model_data
 from evaluation import evaluate_on_test, out_of_sample_r2, save_results
+from pipeline import RAW_DIR, FeatureBuilder, prepare_model_data
+from sklearn.ensemble import RandomForestRegressor
 
 TARGET = "ret_excess_lead1"
 
@@ -59,27 +58,46 @@ def predict_in_chunks(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--max-depths", type=int, nargs="+", default=[2, 4, 6],
-                        help="Tree depths to tune on validation.")
-    parser.add_argument("--max-features", type=parse_max_features, nargs="+",
-                        default=["sqrt", 50],
-                        help="Feature subsample per split: 'sqrt', an integer count, "
-                             "or a fraction in (0, 1).")
+    parser.add_argument(
+        "--max-depths",
+        type=int,
+        nargs="+",
+        default=[2, 4, 6],
+        help="Tree depths to tune on validation.",
+    )
+    parser.add_argument(
+        "--max-features",
+        type=parse_max_features,
+        nargs="+",
+        default=["sqrt", 50],
+        help="Feature subsample per split: 'sqrt', an integer count, or a fraction in (0, 1).",
+    )
     parser.add_argument("--n-estimators", type=int, default=300)
-    parser.add_argument("--max-samples", type=float, default=0.5,
-                        help="Bootstrap sample fraction per tree.")
+    parser.add_argument(
+        "--max-samples", type=float, default=0.5, help="Bootstrap sample fraction per tree."
+    )
     parser.add_argument("--n-jobs", type=int, default=-1)
-    parser.add_argument("--raw-dir", type=Path, default=RAW_DIR,
-                        help="Directory holding the five raw data files.")
-    parser.add_argument("--processed-panel", type=Path, default=None,
-                        help="Optional prebuilt data/processed/model_panel.parquet.")
-    parser.add_argument("--sample-rows", type=int, default=None,
-                        help="Optional row cap for quick experiments.")
-    parser.add_argument("--no-interactions", action="store_true",
-                        help="Drop characteristic x macro interaction features.")
+    parser.add_argument(
+        "--raw-dir", type=Path, default=RAW_DIR, help="Directory holding the five raw data files."
+    )
+    parser.add_argument(
+        "--processed-panel",
+        type=Path,
+        default=None,
+        help="Optional prebuilt data/processed/model_panel.parquet.",
+    )
+    parser.add_argument(
+        "--sample-rows", type=int, default=None, help="Optional row cap for quick experiments."
+    )
+    parser.add_argument(
+        "--no-interactions",
+        action="store_true",
+        help="Drop characteristic x macro interaction features.",
+    )
     parser.add_argument("--output-dir", type=Path, default=None)
-    parser.add_argument("--smoke", action="store_true",
-                        help="Run end-to-end on generated synthetic data.")
+    parser.add_argument(
+        "--smoke", action="store_true", help="Run end-to-end on generated synthetic data."
+    )
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -127,8 +145,9 @@ def main() -> None:
         val_r2 = out_of_sample_r2(y_val, val_pred)
         params = {"max_depth": depth, "max_features": max_features}
         validation_curve.append({**params, "validation_oos_r2": float(val_r2)})
-        print(f"max_depth={depth} max_features={max_features!s:>6}  "
-              f"validation OOS R^2 = {val_r2:.6f}")
+        print(
+            f"max_depth={depth} max_features={max_features!s:>6}  validation OOS R^2 = {val_r2:.6f}"
+        )
         if val_r2 > best["oos_r2"]:
             best = {"params": params, "oos_r2": float(val_r2), "model": model}
 

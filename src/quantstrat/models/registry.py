@@ -9,11 +9,9 @@ import pandas as pd
 class ModelAdapter(Protocol):
     name: str
 
-    def fit(self, train: pd.DataFrame, target: str, features: list[str]) -> "ModelAdapter":
-        ...
+    def fit(self, train: pd.DataFrame, target: str, features: list[str]) -> ModelAdapter: ...
 
-    def predict(self, panel: pd.DataFrame, features: list[str]) -> pd.Series:
-        ...
+    def predict(self, panel: pd.DataFrame, features: list[str]) -> pd.Series: ...
 
 
 @dataclass(frozen=True)
@@ -44,5 +42,7 @@ MODEL_SPECS: dict[str, ModelSpec] = {
     "nn3": ModelSpec("nn3", "neural_network", captures_interactions=True),
     "nn4": ModelSpec("nn4", "neural_network", captures_interactions=True),
     "nn5": ModelSpec("nn5", "neural_network", captures_interactions=True),
-    "transformer_nn": ModelSpec("transformer_nn", "neural_network_extension", captures_interactions=True),
+    "transformer_nn": ModelSpec(
+        "transformer_nn", "neural_network_extension", captures_interactions=True
+    ),
 }
