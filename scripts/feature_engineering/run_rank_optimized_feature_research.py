@@ -12,11 +12,10 @@ import polars as pl
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
-sys.path.insert(0, str(ROOT / "scripts" / "feature_engineering"))
+sys.path.insert(0, str(ROOT / "scripts" / "modeling"))
 
-from run_feature_engineering_nn5_experiment import (
+from run_paper_rolling_models import (
     decile_spread_sharpe,
-    feature_ic_importance,
     load_split_frame,
     monthly_spearman_ic,
 )
@@ -44,6 +43,24 @@ def _read_selection_ranks(path: Path, min_months: int) -> pd.DataFrame:
     ranks = ranks[np.isfinite(ranks["selection_abs_ic"])].copy()
     ranks["sign"] = ranks["selection_mean_ic"].map(_sign)
     return ranks.sort_values("selection_abs_ic", ascending=False)
+
+
+def _read_fixed_design(path: Path) -> pd.DataFrame:
+    design = pd.read_csv(path)
+    required = {
+        "model",
+        "feature",
+        "category",
+        "selection_mean_ic",
+        "selection_abs_ic",
+        "sign_multiplier",
+    }
+    missing = sorted(required - set(design.columns))
+    if missing:
+        raise ValueError(f"Fixed design file is missing columns: {missing}")
+    design = design.copy()
+    design["sign"] = design["sign_multiplier"].astype(int)
+    return design.sort_values(["model", "selection_abs_ic"], ascending=[True, False])
 
 
 def _build_rank_feature_sets(ranks: pd.DataFrame) -> dict[str, list[str]]:
@@ -120,6 +137,46 @@ def _build_rank_feature_sets(ranks: pd.DataFrame) -> dict[str, list[str]]:
 def _feature_categories(ranks: pd.DataFrame, features: list[str]) -> dict[str, str]:
     mapping = ranks.drop_duplicates("feature").set_index("feature")["category"].to_dict()
     return {feature: mapping.get(feature, "unknown") for feature in features}
+
+
+def feature_ic_importance(
+    frame: pd.DataFrame,
+    features: list[str],
+    feature_categories: dict[str, str],
+    feature_set: str,
+    date_column: str,
+    target_column: str,
+) -> pd.DataFrame:
+    rows = []
+    for feature in features:
+        values = []
+        for _, month_frame in frame[[date_column, target_column, feature]].groupby(
+            date_column, sort=False
+        ):
+            valid = month_frame[[target_column, feature]].dropna()
+            if valid[feature].nunique() < 2 or valid[target_column].nunique() < 2:
+                continue
+            corr = valid[feature].corr(valid[target_column], method="spearman")
+            if np.isfinite(corr):
+                values.append(float(corr))
+        mean_ic = float(np.mean(values)) if values else np.nan
+        rows.append(
+            {
+                "model": feature_set,
+                "feature": feature,
+                "category": feature_categories.get(feature, "unknown"),
+                "mean_monthly_spearman_ic": mean_ic,
+                "abs_mean_monthly_spearman_ic": abs(mean_ic) if np.isfinite(mean_ic) else np.nan,
+                "months": len(values),
+            }
+        )
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    out["importance_rank"] = (
+        out["abs_mean_monthly_spearman_ic"].rank(method="first", ascending=False).astype("Int64")
+    )
+    return out.sort_values(["model", "importance_rank"])
 
 
 def _load_oos_frame(
@@ -215,6 +272,17 @@ def main() -> None:
             "reports/feature_engineering/nn5_feature_selected_1987_1996_to_1997_2016_selection_ranks.csv"
         ),
     )
+    parser.add_argument(
+        "--fixed-design",
+        type=Path,
+        default=None,
+        help=(
+            "Use an existing design CSV with model, feature, category, "
+            "selection_abs_ic, and sign_multiplier columns. This restores a "
+            "previous fixed feature setup without needing the original "
+            "selection-rank research file."
+        ),
+    )
     parser.add_argument("--out-prefix", default="nn5_rank_optimized_feature_research")
     parser.add_argument("--oos-start-year", type=int, default=1997)
     parser.add_argument("--oos-end-year", type=int, default=2016)
@@ -236,11 +304,22 @@ def main() -> None:
     config["model_params"]["nn5"]["zero_output_init"] = False
     config["model_params"]["nn5"].setdefault("output_init_scale", 0.01)
 
-    selection_path = (
-        args.selection_ranks if args.selection_ranks.is_absolute() else ROOT / args.selection_ranks
-    )
-    ranks = _read_selection_ranks(selection_path, args.min_selection_months)
-    feature_sets = _build_rank_feature_sets(ranks)
+    if args.fixed_design is None:
+        selection_path = (
+            args.selection_ranks
+            if args.selection_ranks.is_absolute()
+            else ROOT / args.selection_ranks
+        )
+        ranks = _read_selection_ranks(selection_path, args.min_selection_months)
+        feature_sets = _build_rank_feature_sets(ranks)
+    else:
+        design_path = (
+            args.fixed_design if args.fixed_design.is_absolute() else ROOT / args.fixed_design
+        )
+        ranks = _read_fixed_design(design_path)
+        feature_sets = {
+            name: group["feature"].tolist() for name, group in ranks.groupby("model", sort=False)
+        }
     if args.groups:
         missing = sorted(set(args.groups) - set(feature_sets))
         if missing:

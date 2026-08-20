@@ -1,78 +1,39 @@
 # Scripts
 
-This folder keeps command-line entry points for the Gu-Kelly-Xiu replication.
-The stable wrapper commands remain at the top level, while implementation
-scripts are grouped by purpose.
+This folder contains reproducible entry points for model runs and strategy
+grid generation.
+
+Full ordered workflow:
+
+```bash
+bash scripts/run_full_research_workflow.sh
+```
+
+It expects:
 
 ```text
-scripts/
-|-- run_paper_rolling_models.py   # stable wrapper for VM/GitHub commands
-|-- run_pipeline.py               # small orchestration helper
-|-- data_processing/              # panel building and data merges
-|-- modeling/                     # rolling model-training implementations
-|-- feature_engineering/          # ranks and feature-set experiments
-|-- reporting/                    # report builders
-`-- experiments/                  # shell launchers and one-off experiments
+data/processed/model_penal_gkx_clean_rankfix.parquet
+data/processed/model_penal_gkx_clean_rankfix_manifest.json
 ```
 
-## Build the model panel
+Rank-optimized 38-feature NN5 prediction workflow:
 
 ```bash
-python scripts/data_processing/build_model_panel.py
+bash scripts/run_rank38_nn5_workflow.sh
 ```
 
-This creates:
+The runner trains the fixed 38-feature NN5 model and stores predictions.
 
-- `data/processed/model_panel.parquet`
-- `data/processed/model_panel_manifest.json`
-- `data/processed/industry_characteristic_interactions.npz`
-- `data/processed/industry_characteristic_interaction_names.json`
-
-For a quick smoke test:
+For all machine-learning models:
 
 ```bash
-python scripts/data_processing/build_model_panel.py --sample-rows 5000
+bash scripts/modeling/run_all_ml_models.sh
 ```
 
-## Run paper model families
+For strategy grids over any compatible prediction parquet:
 
 ```bash
-python -u scripts/run_paper_rolling_models.py \
-  --config configs/paper_all_models_no_interactions_gkx_clean_rankfix_nonconstant.yaml \
-  --models ols ridge elastic_net pcr random_forest nn1 nn2 nn3 nn4 nn5 \
-  --out-prefix gkx_clean_rankfix_no_interactions
-```
-
-Implemented paper model names:
-
-- `ols`
-- `ols_3`
-- `elastic_net_huber`
-- `pcr`
-- `pls`
-- `random_forest`
-- `gbrt_huber`
-- `nn1`
-- `nn2`
-- `nn3`
-- `nn4`
-- `nn5`
-- `transformer_nn`
-
-Use configs ending in `no_interactions` for the smaller GitHub/VM workflow.
-
-## Feature engineering
-
-```bash
-python scripts/feature_engineering/rank_stock_characteristics.py --help
-python scripts/feature_engineering/run_rank_optimized_feature_research.py --help
-```
-
-The root-level `scripts/rank_stock_characteristics.py` wrapper is kept for old
-commands.
-
-## Transformer experiments
-
-```bash
-bash scripts/experiments/transformer/run_transformer_mlp_light_grid.sh
+bash scripts/modeling/run_strategy_grid.sh \
+  reports/model_runs/all_models_rankfix_no_interactions_predictions.parquet \
+  reports/strategies/model_strategy_grid
 ```

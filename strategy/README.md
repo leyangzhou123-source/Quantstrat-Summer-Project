@@ -1,20 +1,21 @@
 # Strategy
 
-This folder contains standalone code for turning model prediction parquet files into
-portfolio strategy returns.
+This folder contains the model-agnostic strategy grid generator.
 
-Current strategies:
-
-- `top_bottom_decile`: value-weighted top forecast decile minus bottom forecast decile.
-- `signal_weighted_vol_target`: market-neutral long-short strategy using top and bottom
-  forecast deciles, signal-strength weights within each side, and trailing volatility
-  targeting.
-
-Example:
+The main script is:
 
 ```bash
-PYTHONPATH=. python -m strategy.build_strategies \
-  --predictions reports/model_runs/gkx_clean_nn5_no_shrinkage_full_rolling_predictions.parquet \
-  --out-dir reports/strategies/nn5_no_shrinkage
+python -B -m strategy.optimize_rank_strategy_risk_overlay \
+  --predictions reports/model_runs/all_models_rankfix_no_interactions_predictions.parquet \
+  --out-dir reports/strategies/model_strategy_grid \
+  --smoothing-grid 1 3 \
+  --turnover-cost-bps 5
 ```
 
+The prediction parquet must contain `month`, `permno`, `ret_excess_lead1`,
+`me`, `forecast`, and `model`. Multiple models can be stored in the same file;
+the strategy grid is evaluated separately for each source/model pair.
+
+The selected strategy is chosen by tune-period annualized Sharpe only. Other
+metrics such as drawdown, volatility, Calmar, turnover, and test Sharpe are
+reported for evaluation but do not enter the selection score.

@@ -1,7 +1,7 @@
 [project]
 name = "quantstrat-ml-asset-pricing"
 version = "0.1.0"
-description = "Research scaffold for reproducing an empirical asset pricing machine-learning workflow."
+description = "Clean NN5 rank-optimized asset-pricing strategy workflow."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -10,20 +10,19 @@ dependencies = [
   "polars>=0.20",
   "pyarrow>=14.0",
   "pyyaml>=6.0",
+  "scipy>=1.10",
   "scikit-learn>=1.3",
+  "jax>=0.4",
 ]
 
 [project.optional-dependencies]
+models = [
+  "torch>=2.0",
+]
 dev = [
   "pytest>=7.0",
   "ruff>=0.4",
 ]
-models = [
-  "jax>=0.4",
-  "xgboost>=2.0",
-  "torch>=2.0",
-]
-
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
@@ -40,7 +39,4 @@ line-length = 100
 target-version = "py310"
 
 [tool.ruff.lint]
-ignore = [
-  # Existing model modules use paper/model names such as NN5.py and OLS.py.
-  "N999",
-]
+ignore = ["N999"]

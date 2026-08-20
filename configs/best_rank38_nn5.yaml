@@ -1,5 +1,5 @@
 project:
-  name: quantstrat_ml_asset_pricing
+  name: quantstrat_best_rank38_nn5
   random_seed: 42
 
 data:
@@ -49,7 +49,8 @@ model_params:
     n_iter_no_change: 8
     tol: 0.000001
     learning_rate_decay: 0.99
-    zero_output_init: true
+    zero_output_init: false
+    output_init_scale: 0.01
     standardize_target: true
     clip_grad_norm: 5.0
     forecast_clip: null
@@ -58,9 +59,11 @@ model_params:
     prediction_batch_size: 65536
     scale_features: true
     drop_features_after_matrix: true
+    validation_selection_metric: spearman_ic
+    validation_date_column: month
     validation_grid:
       alpha: [0.000001, 0.00001, 0.0001]
-      learning_rate_init: [0.0001, 0.001]
+      learning_rate_init: [0.0001]
 
 evaluation:
   benchmark_forecast: zero

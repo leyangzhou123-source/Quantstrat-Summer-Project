@@ -177,6 +177,8 @@ def main() -> None:
     out_dir = ROOT / "reports" / "model_runs"
     out_dir.mkdir(parents=True, exist_ok=True)
     predictions_path = out_dir / f"{args.out_prefix}_predictions.parquet"
+    metrics_path = out_dir / f"{args.out_prefix}_rolling_metrics.csv"
+    summary_path = out_dir / f"{args.out_prefix}_summary.csv"
 
     all_predictions = []
     all_metrics = []
@@ -264,7 +266,9 @@ def main() -> None:
     predictions = pd.concat(all_predictions, ignore_index=True)
     annual_metrics = pd.DataFrame(all_metrics)
     predictions.to_parquet(predictions_path, index=False)
+    annual_metrics.to_csv(metrics_path, index=False)
     summary = final_summary(predictions, annual_metrics, engine, config)
+    summary.to_csv(summary_path, index=False)
     print(summary.to_string(index=False))
 
 

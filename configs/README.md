@@ -1,12 +1,15 @@
 # Configs
 
-Configuration files are intentionally kept flat so existing VM commands remain
-stable.
+This clean repo keeps three modeling configs:
 
-Naming convention:
+- `best_rank38_nn5.yaml`: rank-fixed, no-interaction NN5 setup used to
+  regenerate the fixed 38-feature NN5 prediction source.
+- `all_models_rankfix_no_interactions.yaml`: full rolling benchmark config for
+  OLS, Ridge, Elastic Net, Huber models, PCR, PLS, random forest, GBRT, NN1-NN5,
+  and the transformer extension.
+- `all_models_light_rankfix_no_interactions.yaml`: lighter non-NN benchmark for
+  local smoke testing and quick comparison.
 
-- `paper_*`: paper-style rolling-window experiments.
-- `local_*` and `smoke_*`: small local checks.
-- `transformer_*`: transformer neural-network experiments.
-- `*_rankfix*`: uses the rank-fixed model panel.
-- `*_no_interactions*`: uses the smaller no-interaction feature set.
+The fixed feature design lives in:
+
+- `feature_designs/rank_signed_anti_crowded38.csv`

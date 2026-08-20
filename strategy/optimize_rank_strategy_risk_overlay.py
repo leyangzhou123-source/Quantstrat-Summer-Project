@@ -8,14 +8,9 @@ import numpy as np
 import pandas as pd
 
 DEFAULT_PREDICTIONS = [
-    Path(
-        "reports/feature_engineering/nn5_rank_optimized_feature_research_2002_2016_fixed_nn5_predictions.parquet"
-    ),
-    Path(
-        "reports/feature_engineering/nn5_rank_optimized_feature_research_2002_2016_fixed_composite_predictions.parquet"
-    ),
+    Path("reports/model_runs/all_models_rankfix_no_interactions_predictions.parquet"),
 ]
-DEFAULT_OUT_DIR = Path("reports/strategies/rank_optimized_risk_overlay")
+DEFAULT_OUT_DIR = Path("reports/strategies/model_strategy_grid")
 
 
 def source_name(path: Path) -> str:
@@ -68,6 +63,8 @@ def summarize(returns: pd.Series) -> dict[str, float]:
 def load_predictions(paths: list[Path]) -> pd.DataFrame:
     frames = []
     for path in paths:
+        if not path.exists():
+            raise FileNotFoundError(f"Prediction file not found: {path}")
         frame = pd.read_parquet(
             path,
             columns=["month", "permno", "ret_excess_lead1", "me", "forecast", "model"],
@@ -89,9 +86,12 @@ def load_predictions(paths: list[Path]) -> pd.DataFrame:
         & np.isfinite(data["me"])
         & (data["me"] > 0)
     )
-    return (
-        data.loc[valid].sort_values(["source", "model", "permno", "month"]).reset_index(drop=True)
+    clean = data.loc[valid].sort_values(["source", "model", "permno", "month"]).reset_index(
+        drop=True
     )
+    if clean.empty:
+        raise ValueError("No valid prediction rows after filtering finite returns, forecasts, and me.")
+    return clean
 
 
 def prepare_panel(data: pd.DataFrame, smoothing: int) -> pd.DataFrame:
@@ -131,7 +131,7 @@ def raw_weights(panel: pd.DataFrame, scheme: str) -> pd.Series:
     raise ValueError(f"Unknown weighting scheme: {scheme}")
 
 
-def build_long_short_returns(panel: pd.DataFrame) -> pd.DataFrame:
+def build_long_short_returns(panel: pd.DataFrame, turnover_cost_bps: float = 5.0) -> pd.DataFrame:
     outputs = []
     top_fractions = [0.05, 0.10, 0.15, 0.20]
     weightings = ["equal", "sqrt_me", "value", "signal"]
@@ -145,8 +145,14 @@ def build_long_short_returns(panel: pd.DataFrame) -> pd.DataFrame:
             "sum"
         )
         selected = selected[denom > 0].copy()
-        selected["weight"] = selected["raw_weight"] / denom[denom > 0]
-        selected["weighted_return"] = selected["weight"] * selected["realized_return"]
+        selected["leg_weight"] = selected["raw_weight"] / denom[denom > 0]
+        selected["signed_weight"] = np.where(
+            selected["side"].eq("top"),
+            selected["leg_weight"],
+            -selected["leg_weight"],
+        )
+        selected["weighted_return"] = selected["leg_weight"] * selected["realized_return"]
+        selected["abs_weight"] = selected["signed_weight"].abs()
         legs = (
             selected.groupby(["source", "model", "month", "side"], as_index=False)[
                 "weighted_return"
@@ -163,7 +169,53 @@ def build_long_short_returns(panel: pd.DataFrame) -> pd.DataFrame:
             continue
         legs["return"] = legs["top"] - legs["bottom"]
         legs["base_strategy"] = f"top{int(top_fraction * 1000):03d}_{weighting}"
-        outputs.append(legs[["source", "model", "month", "base_strategy", "return"]])
+        positions = selected[
+            ["source", "model", "month", "permno", "signed_weight", "abs_weight"]
+        ].copy()
+        positions["base_strategy"] = f"top{int(top_fraction * 1000):03d}_{weighting}"
+        turnover = []
+        for keys, group in positions.groupby(["source", "model", "base_strategy"], sort=False):
+            wide = (
+                group.pivot_table(
+                    index="month",
+                    columns="permno",
+                    values="signed_weight",
+                    aggfunc="sum",
+                    fill_value=0.0,
+                )
+                .sort_index()
+                .astype(float)
+            )
+            monthly_turnover = wide.diff().abs().sum(axis=1)
+            if len(monthly_turnover):
+                monthly_turnover.iloc[0] = wide.iloc[0].abs().sum()
+            turnover.append(
+                monthly_turnover.rename("turnover")
+                .reset_index()
+                .assign(source=keys[0], model=keys[1], base_strategy=keys[2])
+            )
+        if not turnover:
+            continue
+        turnover_df = pd.concat(turnover, ignore_index=True)
+        legs = legs.merge(turnover_df, on=["source", "model", "month", "base_strategy"], how="left")
+        legs["turnover"] = legs["turnover"].fillna(0.0)
+        legs["turnover_cost"] = legs["turnover"] * float(turnover_cost_bps) / 10000.0
+        legs["return"] = legs["return"] - legs["turnover_cost"]
+        outputs.append(
+            legs[
+                [
+                    "source",
+                    "model",
+                    "month",
+                    "base_strategy",
+                    "return",
+                    "turnover",
+                    "turnover_cost",
+                ]
+            ]
+        )
+    if not outputs:
+        raise ValueError("No long-short returns could be built from the prediction ranks.")
     return pd.concat(outputs, ignore_index=True)
 
 
@@ -211,6 +263,8 @@ def apply_risk_overlay(
             exposure *= np.where(trailing_return < 0.0, momentum_cut, 1.0)
         group["exposure"] = exposure.clip(lower=0.0, upper=max_leverage)
         group["return"] = group["return"] * group["exposure"]
+        group["turnover"] = group["turnover"] * group["exposure"]
+        group["turnover_cost"] = group["turnover_cost"] * group["exposure"]
         group["target_vol"] = np.nan if target_vol is None else target_vol
         group["vol_lookback"] = vol_lookback
         group["dd_lookback"] = dd_lookback
@@ -256,6 +310,8 @@ def make_strategy_grid(base_returns: pd.DataFrame) -> pd.DataFrame:
                         momentum_cut=momentum_cut,
                     )
                 )
+    if not overlays:
+        raise ValueError("Strategy overlay grid produced no returns.")
     return pd.concat(overlays, ignore_index=True)
 
 
@@ -279,36 +335,34 @@ def evaluate(returns: pd.DataFrame, tune_end: str) -> pd.DataFrame:
             "momentum_lookback": group["momentum_lookback"].iloc[0],
             "momentum_cut": group["momentum_cut"].iloc[0],
             "mean_exposure": float(group["exposure"].mean()),
+            "mean_turnover": float(group["turnover"].mean()),
+            "mean_turnover_cost": float(group["turnover_cost"].mean()),
         }
         row.update({f"tune_{key}": value for key, value in summarize(tune["return"]).items()})
         row.update({f"test_{key}": value for key, value in summarize(test["return"]).items()})
         row.update({f"full_{key}": value for key, value in summarize(group["return"]).items()})
         rows.append(row)
     result = pd.DataFrame(rows)
-    result["selection_score"] = (
-        result["tune_annualized_sharpe"].fillna(-999.0)
-        + 0.30 * result["tune_calmar"].fillna(-999.0)
-        - 1.10 * result["tune_max_drawdown"].abs().fillna(999.0)
-        - 0.20 * result["tune_annualized_volatility"].fillna(999.0)
-    )
+    result["selection_sharpe"] = result["tune_annualized_sharpe"]
     return result
 
 
-def select_best(grid: pd.DataFrame) -> pd.DataFrame:
+def select_by_tune_sharpe(grid: pd.DataFrame, min_tune_months: int = 48) -> pd.DataFrame:
     eligible = grid[
-        (grid["tune_months"] >= 48)
+        (grid["tune_months"] >= int(min_tune_months))
         & np.isfinite(grid["tune_annualized_sharpe"])
         & np.isfinite(grid["test_annualized_sharpe"])
-        & (grid["tune_max_drawdown"] >= -0.35)
     ].copy()
     if eligible.empty:
-        eligible = grid[
-            (grid["tune_months"] >= 48)
-            & np.isfinite(grid["tune_annualized_sharpe"])
-            & np.isfinite(grid["test_annualized_sharpe"])
-        ].copy()
+        raise ValueError(
+            "No strategy has finite tune and test Sharpe with at least "
+            f"{int(min_tune_months)} tune months."
+        )
     return (
-        eligible.sort_values(["source", "model", "selection_score"], ascending=[True, True, False])
+        eligible.sort_values(
+            ["source", "model", "selection_sharpe"],
+            ascending=[True, True, False],
+        )
         .groupby(["source", "model"], as_index=False)
         .head(1)
         .sort_values("test_annualized_sharpe", ascending=False)
@@ -317,12 +371,19 @@ def select_best(grid: pd.DataFrame) -> pd.DataFrame:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Drawdown-aware strategy search over fixed forecast files."
+        description="Sharpe-selected strategy grid over one or more ML prediction files."
     )
     parser.add_argument("--predictions", type=Path, nargs="+", default=DEFAULT_PREDICTIONS)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--tune-end", default="2009-12-31")
+    parser.add_argument("--min-tune-months", type=int, default=48)
     parser.add_argument("--smoothing-grid", type=int, nargs="+", default=[1, 3])
+    parser.add_argument(
+        "--turnover-cost-bps",
+        type=float,
+        default=5.0,
+        help="One-way cost in basis points per unit of monthly portfolio turnover.",
+    )
     args = parser.parse_args()
 
     prediction_paths = [
@@ -335,7 +396,7 @@ def main() -> None:
     all_returns = []
     for smoothing in args.smoothing_grid:
         panel = prepare_panel(data, smoothing=smoothing)
-        base_returns = build_long_short_returns(panel)
+        base_returns = build_long_short_returns(panel, turnover_cost_bps=args.turnover_cost_bps)
         base_returns["forecast_smoothing"] = smoothing
         returns = make_strategy_grid(base_returns)
         returns["forecast_smoothing"] = smoothing
@@ -346,17 +407,17 @@ def main() -> None:
     grid = evaluate(returns, args.tune_end).sort_values(
         ["test_annualized_sharpe", "test_max_drawdown"], ascending=[False, False]
     )
-    best = select_best(grid)
-    best_returns = returns.merge(
-        best[["source", "model", "strategy"]],
+    selected = select_by_tune_sharpe(grid, min_tune_months=args.min_tune_months)
+    selected_returns = returns.merge(
+        selected[["source", "model", "strategy"]],
         on=["source", "model", "strategy"],
         how="inner",
     )
 
     grid.to_csv(out_dir / "all_strategy_grid_results.csv", index=False)
-    best.to_csv(out_dir / "best_strategy_by_model.csv", index=False)
-    best_returns.to_csv(out_dir / "best_strategy_returns.csv", index=False)
-    best_returns.to_parquet(out_dir / "best_strategy_returns.parquet", index=False)
+    selected.to_csv(out_dir / "selected_strategy_by_model.csv", index=False)
+    selected_returns.to_csv(out_dir / "selected_strategy_returns.csv", index=False)
+    selected_returns.to_parquet(out_dir / "selected_strategy_returns.parquet", index=False)
 
     show_columns = [
         "source",
@@ -371,8 +432,8 @@ def main() -> None:
         "full_annualized_volatility",
         "mean_exposure",
     ]
-    print("Best selected by tune-period risk-adjusted score")
-    print(best[show_columns].to_string(index=False))
+    print("Selected by tune-period annualized Sharpe")
+    print(selected[show_columns].to_string(index=False))
     print("\nTop 20 by post-tune test Sharpe")
     print(grid[show_columns].head(20).to_string(index=False))
 
